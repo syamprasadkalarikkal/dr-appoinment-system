@@ -34,11 +34,14 @@ export default function Doctor() {
     { startTime: '09:00', endTime: '10:00' }
   ]);
 
-  // Medical Records
+  // Record Upload State
   const [showRecordModal, setShowRecordModal] = useState(false);
+  const [recordType, setRecordType] = useState('prescription');
   const [recordTitle, setRecordTitle] = useState('');
   const [recordDescription, setRecordDescription] = useState('');
-  const [recordType, setRecordType] = useState('prescription');
+  const [fileToUpload, setFileToUpload] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
 
   useEffect(() => {
     checkAuth();
@@ -51,6 +54,33 @@ export default function Doctor() {
     }
   }, [isAuthenticated, isApproved, doctorData]);
 
+  // Real-time updates
+  useEffect(() => {
+    if (!doctorData?.id) return;
+
+    const channel = supabase
+      .channel('doctor-dashboard')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `doctor_id=eq.${doctorData.id}`
+        },
+        (payload) => {
+          fetchAppointments();
+          fetchTimeSlots();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [doctorData?.id, selectedAppointment]);
+
+
   const checkAuth = async () => {
     try {
       const userRole = localStorage.getItem('userRole');
@@ -62,14 +92,14 @@ export default function Doctor() {
       }
 
       const { data: { user } } = await supabase.auth.getUser();
-      
+
       if (!user) {
         router.push('/Login');
         return;
       }
 
       const userData = await getUserRole(user.id);
-      
+
       if (!userData || userData.role !== 'doctor') {
         router.push('/Login');
         return;
@@ -78,7 +108,7 @@ export default function Doctor() {
       setDoctorData(userData);
       setIsApproved(userData.is_approved === true);
       setIsAuthenticated(true);
-      
+
     } catch (error) {
       console.error('Auth error:', error);
       router.push('/Login');
@@ -189,11 +219,11 @@ export default function Doctor() {
       // Iterate through each day in the range
       for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
         const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
-        
+
         // Check if this day is selected
         if (selectedDays.includes(dayOfWeek)) {
           const dateStr = date.toISOString().split('T')[0];
-          
+
           // Add all time slots for this day
           bulkTimeSlots.forEach(slot => {
             if (slot.startTime && slot.endTime && slot.startTime < slot.endTime) {
@@ -281,14 +311,39 @@ export default function Doctor() {
     }
   };
 
-  const handleCreateMedicalRecord = async () => {
+  const handleAddMedicalRecord = async () => {
     if (!selectedAppointment || !recordTitle) {
-      alert('Please fill required fields');
+      alert("Please fill in the title.");
       return;
     }
 
     try {
-      const { error } = await supabase
+      setUploading(true);
+      let documentUrl = null;
+      let documentName = null;
+
+      // 1. Upload File if selected
+      if (fileToUpload) {
+        const fileExt = fileToUpload.name.split('.').pop();
+        const fileName = `${selectedAppointment.patient_id}/${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from('documents')
+          .upload(fileName, fileToUpload);
+
+        if (uploadError) throw uploadError;
+
+        // Get Signed URL (valid for 1 year for simplicity in this demo)
+        const { data: urlData, error: urlError } = await supabase.storage
+          .from('documents')
+          .createSignedUrl(fileName, 60 * 60 * 24 * 365);
+
+        if (urlError) throw urlError;
+        documentUrl = urlData.signedUrl;
+        documentName = fileToUpload.name;
+      }
+
+      // 2. Insert Record
+      const { error: insertError } = await supabase
         .from('medical_records')
         .insert([
           {
@@ -297,33 +352,47 @@ export default function Doctor() {
             appointment_id: selectedAppointment.id,
             record_type: recordType,
             title: recordTitle,
-            description: recordDescription
+            description: recordDescription,
+            document_url: documentUrl,
+            document_name: documentName
           }
         ]);
 
-      if (error) throw error;
+      if (insertError) throw insertError;
 
-      // Create notification for patient
+      // 3. Notify Patient
       await supabase
         .from('notifications')
         .insert([
           {
             user_id: selectedAppointment.patient_id,
-            type: 'new_medical_record',
-            title: 'New Medical Record',
-            message: `Dr. ${doctorData.name} added a new ${recordType.replace('_', ' ')} to your medical records`,
+            type: 'new_record',
+            title: 'New Medical Record Added',
+            message: `Dr. ${doctorData.name} added a new ${recordType}: ${recordTitle}`,
+            related_id: selectedAppointment.id
           }
         ]);
 
-      alert('Medical record created successfully!');
+      // 4. Update Appointment Status to Completed (as per requirement)
+      const { error: updateError } = await supabase
+        .from('appointments')
+        .update({ status: 'completed' })
+        .eq('id', selectedAppointment.id);
+
+      if (updateError) console.error('Error auto-completing appointment:', updateError);
+
+      alert('Medical Record added successfully!');
       setShowRecordModal(false);
       setRecordTitle('');
       setRecordDescription('');
-      setRecordType('prescription');
+      setFileToUpload(null);
       setSelectedAppointment(null);
+
     } catch (error) {
-      console.error('Error creating medical record:', error);
-      alert('Failed to create medical record');
+      console.error('Error adding record:', error);
+      alert('Failed to add record: ' + error.message);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -343,20 +412,20 @@ export default function Doctor() {
 
   const formatDate = (dateStr) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
     });
   };
 
   const todayAppointments = appointments.filter(apt => {
     const today = new Date().toISOString().split('T')[0];
-    return apt.time_slot?.date === today && 
-           (apt.status === 'scheduled' || apt.status === 'confirmed');
+    return apt.time_slot?.date === today &&
+      (apt.status === 'scheduled' || apt.status === 'confirmed');
   });
 
-  const upcomingAppointments = appointments.filter(apt => 
+  const upcomingAppointments = appointments.filter(apt =>
     (apt.status === 'scheduled' || apt.status === 'confirmed') &&
     new Date(apt.time_slot?.date) > new Date()
   );
@@ -416,10 +485,10 @@ export default function Doctor() {
                 </svg>
               </div>
             </div>
-            
+
             <h2 className="text-2xl font-bold text-gray-900 mb-3">Account Pending Approval</h2>
             <p className="text-gray-600 mb-6 max-w-md mx-auto">
-              Your doctor account has been successfully created and is currently under review by the administrator. 
+              Your doctor account has been successfully created and is currently under review by the administrator.
               You will be able to access all features once your account is approved.
             </p>
 
@@ -487,11 +556,10 @@ export default function Doctor() {
               <button
                 key={tab.id}
                 onClick={() => setCurrentView(tab.id)}
-                className={`relative py-4 px-1 border-b-2 font-medium text-sm transition ${
-                  currentView === tab.id
-                    ? 'border-green-600 text-green-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
+                className={`relative py-4 px-1 border-b-2 font-medium text-sm transition ${currentView === tab.id
+                  ? 'border-green-600 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
               >
                 <span className="mr-2">{tab.icon}</span>
                 {tab.name}
@@ -677,13 +745,12 @@ export default function Doctor() {
                             <p className="text-sm text-gray-600">{appointment.patient?.email}</p>
                           </div>
                         </div>
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          appointment.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${appointment.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
                           appointment.status === 'confirmed' ? 'bg-green-100 text-green-700' :
-                          appointment.status === 'completed' ? 'bg-gray-100 text-gray-700' :
-                          appointment.status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                          'bg-yellow-100 text-yellow-700'
-                        }`}>
+                            appointment.status === 'completed' ? 'bg-gray-100 text-gray-700' :
+                              appointment.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                                'bg-yellow-100 text-yellow-700'
+                          }`}>
                           {appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1)}
                         </span>
                       </div>
@@ -740,7 +807,7 @@ export default function Doctor() {
                             }}
                             className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm"
                           >
-                            Add Medical Record
+                            Add Record
                           </button>
                         </div>
                       )}
@@ -779,7 +846,7 @@ export default function Doctor() {
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
                 <p className="text-sm text-blue-900">
-                  <strong>💡 Tip:</strong> Time slots you create here will immediately be available for patients to book appointments. 
+                  <strong>💡 Tip:</strong> Time slots you create here will immediately be available for patients to book appointments.
                   Make sure to create slots for times when you're available to see patients.
                 </p>
               </div>
@@ -802,9 +869,8 @@ export default function Doctor() {
                             </svg>
                             <span>{formatTime(slot.start_time)} - {formatTime(slot.end_time)}</span>
                           </div>
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            slot.is_available ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                          }`}>
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${slot.is_available ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                            }`}>
                             {slot.is_available ? 'Available' : 'Booked'}
                           </span>
                           <span className="text-sm text-gray-600">
@@ -815,11 +881,10 @@ export default function Doctor() {
                       <button
                         onClick={() => handleDeleteTimeSlot(slot.id, slot.current_patients > 0)}
                         disabled={slot.current_patients > 0}
-                        className={`px-4 py-2 rounded-lg transition text-sm ${
-                          slot.current_patients > 0
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                            : 'bg-red-600 text-white hover:bg-red-700'
-                        }`}
+                        className={`px-4 py-2 rounded-lg transition text-sm ${slot.current_patients > 0
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                          }`}
                       >
                         Delete
                       </button>
@@ -872,21 +937,19 @@ export default function Doctor() {
               <div className="flex space-x-2 mb-6">
                 <button
                   onClick={() => setBulkCreateMode(false)}
-                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${
-                    !bulkCreateMode
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
+                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${!bulkCreateMode
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
                 >
                   Single Slot
                 </button>
                 <button
                   onClick={() => setBulkCreateMode(true)}
-                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${
-                    bulkCreateMode
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
+                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${bulkCreateMode
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
                 >
                   Bulk Create
                 </button>
@@ -995,11 +1058,10 @@ export default function Doctor() {
                                 : [...prev, day.value]
                             );
                           }}
-                          className={`py-2 px-3 rounded-lg text-sm font-medium transition ${
-                            selectedDays.includes(day.value)
-                              ? 'bg-green-600 text-white'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
+                          className={`py-2 px-3 rounded-lg text-sm font-medium transition ${selectedDays.includes(day.value)
+                            ? 'bg-green-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
                         >
                           {day.label.substring(0, 3)}
                         </button>
@@ -1091,82 +1153,98 @@ export default function Doctor() {
         </div>
       )}
 
-      {/* Create Medical Record Modal */}
+      {/* Add Medical Record Modal */}
       {showRecordModal && selectedAppointment && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 flex justify-between items-center">
               <h3 className="text-xl font-bold text-gray-900">Add Medical Record</h3>
               <button
                 onClick={() => {
                   setShowRecordModal(false);
                   setSelectedAppointment(null);
+                  setRecordTitle('');
+                  setRecordDescription('');
+                  setFileToUpload(null);
                 }}
-                className="p-2 hover:bg-gray-100 rounded-lg"
+                className="text-gray-500 hover:text-gray-700"
               >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
 
             <div className="p-6 space-y-4">
-              <div className="bg-blue-50 p-3 rounded-lg">
-                <p className="text-sm font-semibold text-blue-900">Patient: {selectedAppointment.patient?.name}</p>
+              {/* Patient Info */}
+              <div className="bg-blue-50 p-3 rounded-lg text-sm text-blue-800 mb-4">
+                Patient: <span className="font-bold">{selectedAppointment.patient?.name}</span>
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-2">Record Type</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Record Type</label>
                 <select
                   value={recordType}
                   onChange={(e) => setRecordType(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="prescription">Prescription</option>
                   <option value="lab_report">Lab Report</option>
+                  <option value="scan">Scan/X-Ray</option>
                   <option value="diagnosis">Diagnosis</option>
-                  <option value="imaging">Imaging</option>
-                  <option value="consultation_note">Consultation Note</option>
+                  <option value="other">Other</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-2">Title *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Title *</label>
                 <input
                   type="text"
                   value={recordTitle}
                   onChange={(e) => setRecordTitle(e.target.value)}
-                  placeholder="e.g., Blood Test Results"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="e.g. Antibiotics Prescription"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-2">Description</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
                   value={recordDescription}
                   onChange={(e) => setRecordDescription(e.target.value)}
-                  placeholder="Enter details..."
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  rows={3}
+                  placeholder="Details..."
                 />
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Attachment (Optional)</label>
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition cursor-pointer relative">
+                  <input
+                    type="file"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    onChange={(e) => setFileToUpload(e.target.files[0])}
+                  />
+                  {fileToUpload ? (
+                    <div className="flex items-center justify-center text-blue-600">
+                      <span className="mr-2">📎</span>
+                      <span className="truncate max-w-[200px]">{fileToUpload.name}</span>
+                    </div>
+                  ) : (
+                    <div className="text-gray-500 text-sm">
+                      <span className="block text-2xl mb-1">📄</span>
+                      Click to upload a file (PDF, IMG)
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4">
                 <button
-                  onClick={() => {
-                    setShowRecordModal(false);
-                    setSelectedAppointment(null);
-                  }}
-                  className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-semibold"
+                  onClick={handleAddMedicalRecord}
+                  disabled={uploading}
+                  className={`w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition ${uploading ? 'opacity-70 cursor-wait' : ''}`}
                 >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreateMedicalRecord}
-                  className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
-                >
-                  Create Record
+                  {uploading ? 'Saving Record...' : 'Save Record'}
                 </button>
               </div>
             </div>

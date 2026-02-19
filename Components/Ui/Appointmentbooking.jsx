@@ -57,7 +57,7 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
   const fetchTimeSlots = async () => {
     try {
       setLoading(true);
-      
+
       let timeFilter = {};
       if (selectedTimeOfDay === 'Morning') {
         timeFilter = { gte: '06:00:00', lt: '12:00:00' };
@@ -95,20 +95,18 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from('appointments')
-        .insert([
-          {
-            patient_id: patientId,
-            doctor_id: doctor.id,
-            slot_id: selectedSlot.id,
-            symptoms: symptoms || null,
-            notes: notes || null,
-            status: 'scheduled'
-          }
-        ])
-        .select();
+        .rpc('book_appointment', {
+          p_slot_id: selectedSlot.id,
+          p_patient_id: patientId,
+          p_doctor_id: doctor.id,
+          p_symptoms: symptoms || null,
+          p_notes: notes || null
+        });
 
       if (error) throw error;
+      if (!data.success) throw new Error(data.error);
+
+      const appointmentId = data.id;
 
       // Create notification for doctor
       await supabase
@@ -119,7 +117,7 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
             type: 'new_appointment',
             title: 'New Appointment Booked',
             message: `You have a new appointment scheduled for ${selectedDate} at ${selectedSlot.start_time}`,
-            related_id: data[0].id
+            related_id: appointmentId
           }
         ]);
 
@@ -208,8 +206,8 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
       <div className="bg-white px-6 py-4 mb-2">
         <h3 className="font-bold text-gray-900 mb-2">Doctor Biography</h3>
         <p className="text-sm text-gray-700 leading-relaxed">
-          {doctor.name} is a dedicated {doctor.specialization.toLowerCase()} with over 15 years of experience 
-          in caring for children's health. She is passionate about ensuring the well-being of young ones and 
+          {doctor.name} is a dedicated {doctor.specialization.toLowerCase()} with over 15 years of experience
+          in caring for children's health. She is passionate about ensuring the well-being of young ones and
           believes in a holistic approach.
         </p>
         <div className="flex flex-wrap gap-2 mt-3">
@@ -300,11 +298,10 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
                 <button
                   key={time}
                   onClick={() => setSelectedTimeOfDay(time)}
-                  className={`flex-1 py-2 rounded-lg font-medium transition ${
-                    selectedTimeOfDay === time
+                  className={`flex-1 py-2 rounded-lg font-medium transition ${selectedTimeOfDay === time
                       ? 'bg-teal-600 text-white'
                       : 'bg-gray-100 text-gray-700'
-                  }`}
+                    }`}
                 >
                   {time}
                 </button>
@@ -329,11 +326,10 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
                           setSelectedSlot(slot);
                           setSelectedTime(slot.start_time);
                         }}
-                        className={`py-3 rounded-lg font-medium transition ${
-                          isSelected
+                        className={`py-3 rounded-lg font-medium transition ${isSelected
                             ? 'bg-teal-600 text-white'
                             : 'bg-teal-50 text-teal-700 hover:bg-teal-100'
-                        }`}
+                          }`}
                       >
                         {formatTime(slot.start_time)}
                       </button>
@@ -383,11 +379,10 @@ export default function AppointmentBooking({ doctor, patientId, onBack, onSucces
         <button
           onClick={handleBookAppointment}
           disabled={!selectedSlot || loading}
-          className={`w-full py-4 rounded-2xl font-bold text-lg transition shadow-lg ${
-            selectedSlot && !loading
+          className={`w-full py-4 rounded-2xl font-bold text-lg transition shadow-lg ${selectedSlot && !loading
               ? 'bg-teal-600 text-white hover:bg-teal-700'
               : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-          }`}
+            }`}
         >
           {loading ? 'Booking...' : `Book Appointment ($50.99)`}
         </button>
