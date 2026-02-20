@@ -1,17 +1,15 @@
-// File location: app/api/send-email/route.js
-// Reads from .env.local automatically in Next.js (no extra setup needed)
+// app/api/send-email/route.js
+// Uses Gmail via Nodemailer — credentials read from .env.local
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY
-const FROM_EMAIL     = process.env.FROM_EMAIL ?? 'AMRT Healthcare <noreply@resend.dev>'
+import nodemailer from 'nodemailer'
 
-export async function OPTIONS() {
-  return new Response('ok', {
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    },
-  })
-}
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS, // Gmail App Password (not your normal password)
+  },
+})
 
 export async function POST(req) {
   try {
@@ -24,31 +22,17 @@ export async function POST(req) {
       )
     }
 
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to:   [to],
-        subject,
-        html,
-      }),
+    await transporter.sendMail({
+      from: `"AMRT Healthcare" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html,
     })
 
-    const data = await res.json()
-
-    if (!res.ok) {
-      console.error('Resend API error:', data)
-      return Response.json({ error: data }, { status: res.status })
-    }
-
-    return Response.json({ success: true, id: data.id }, { status: 200 })
+    return Response.json({ success: true }, { status: 200 })
 
   } catch (err) {
-    console.error('API route error:', err)
+    console.error('Mail error:', err)
     return Response.json({ error: String(err) }, { status: 500 })
   }
 }
