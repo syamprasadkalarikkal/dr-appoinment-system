@@ -1,15 +1,659 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { getUserRole } from '@/lib/getUserRole';
 
+/* ──────────────────────────────────────────────────────────────
+   UTILITY: Haversine distance (km) between two lat/lng points
+────────────────────────────────────────────────────────────── */
+function haversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLng = (lng2 - lng1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getRoomId(id1, id2) {
+  return 'chat_' + [id1, id2].sort().join('_');
+}
+
+/* ══════════════════════════════════════════════════
+   DOCTOR DETAIL MODAL — full profile + certificate + map + chat
+══════════════════════════════════════════════════ */
+function DoctorDetailModal({ doctor, onClose, onBook, onChat }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-teal-700 to-teal-500 p-5 flex items-start justify-between">
+          <div className="flex items-center space-x-4">
+            {doctor.avatar_url
+              ? <img src={doctor.avatar_url} alt="" className="w-16 h-16 rounded-xl object-cover ring-2 ring-white/30" />
+              : <div className="w-16 h-16 bg-white/20 rounded-xl flex items-center justify-center"><span className="text-white font-bold text-2xl">{doctor.name?.charAt(0)}</span></div>}
+            <div>
+              <h2 className="text-lg font-bold text-white">Dr. {doctor.name}</h2>
+              <p className="text-teal-100 text-sm font-medium">{doctor.specialization}</p>
+              {doctor.experience_years && <p className="text-teal-200 text-xs mt-1">{doctor.experience_years} years experience</p>}
+              {doctor._distance != null && (
+                <span className="inline-flex items-center gap-1 mt-1 bg-white/20 text-white text-xs font-semibold px-2 py-0.5 rounded-full">
+                  {doctor._distance.toFixed(1)} km away
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition flex-shrink-0">
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-teal-50 rounded-xl p-3 text-center">
+              <p className="text-lg font-bold text-teal-700">{doctor.experience_years || '—'}</p>
+              <p className="text-xs text-teal-500 font-medium">Yrs Exp</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-3 text-center">
+              <p className="text-lg font-bold text-amber-700">{doctor.consultation_fee ? `₹${doctor.consultation_fee}` : '—'}</p>
+              <p className="text-xs text-amber-500 font-medium">Fee</p>
+            </div>
+            <div className="bg-blue-50 rounded-xl p-3 text-center">
+              <p className="text-sm font-bold text-blue-700 leading-tight">{doctor.languages || '—'}</p>
+              <p className="text-xs text-blue-500 font-medium mt-0.5">Languages</p>
+            </div>
+          </div>
+
+          {/* About */}
+          {doctor.experience_details && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">About</p>
+              <p className="text-sm text-gray-700 leading-relaxed">{doctor.experience_details}</p>
+            </div>
+          )}
+
+          {/* Clinic location info */}
+          {doctor.clinic_place_name && (
+            <div className="bg-teal-50 border border-teal-100 rounded-xl p-4">
+              <p className="text-xs font-bold text-teal-500 uppercase tracking-wider mb-1">Clinic</p>
+              <p className="text-sm font-semibold text-teal-900">{doctor.clinic_place_name}</p>
+              {doctor.clinic_address && <p className="text-xs text-teal-600 mt-0.5 line-clamp-2">{doctor.clinic_address}</p>}
+            </div>
+          )}
+
+          {/* Map */}
+          {doctor.clinic_lat && doctor.clinic_lng && (
+            <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+              <div className="bg-gray-50 px-3 py-1.5 text-xs text-gray-500 font-medium flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                Clinic Location
+              </div>
+              <iframe
+                src={`https://maps.google.com/maps?q=${doctor.clinic_lat},${doctor.clinic_lng}&z=15&output=embed`}
+                width="100%" height="200" style={{ border: 0 }} allowFullScreen loading="lazy" title="Clinic Map" />
+            </div>
+          )}
+
+          {/* Certificate */}
+          {doctor.certificate_url && (
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-xl p-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Medical Certificate</p>
+                  <p className="text-sm font-semibold text-blue-900">{doctor.certificate_name || 'Verified Certificate'}</p>
+                  <span className="inline-flex items-center gap-1 text-[10px] text-green-600 font-semibold mt-0.5">
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                    Verified
+                  </span>
+                </div>
+              </div>
+              <a href={doctor.certificate_url} target="_blank" rel="noreferrer"
+                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                <span>View Certificate</span>
+              </a>
+            </div>
+          )}
+
+          {/* Doctor ID badge */}
+          {doctor.doctor_id && (
+            <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-3">
+              <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" /></svg>
+              <p className="text-xs text-gray-500">Doctor ID: <span className="font-semibold text-gray-700">{doctor.doctor_id}</span></p>
+            </div>
+          )}
+        </div>
+
+        {/* Action buttons */}
+        <div className="p-5 border-t border-gray-100 grid grid-cols-2 gap-3">
+          <button onClick={() => onChat(doctor)}
+            className="py-3 border-2 border-teal-700 text-teal-700 font-bold rounded-xl hover:bg-teal-50 transition text-sm flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+            Chat Now
+          </button>
+          <button onClick={() => { onClose(); onBook(doctor); }}
+            className="py-3 bg-teal-700 text-white font-bold rounded-xl hover:bg-teal-800 transition text-sm">
+            Book Appointment
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════
+   REAL-TIME CHAT PANEL  (appointment-gated)
+══════════════════════════════════════════════════ */
+function ChatPanel({ patientData, chatDoctor, onClose }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [chatAllowed, setChatAllowed] = useState(null); // null = checking
+  const [doctorOnline, setDoctorOnline] = useState(false);
+  const [otherTyping, setOtherTyping] = useState(false);
+  const messagesEndRef = useRef(null);
+  const channelRef = useRef(null);
+  const wsRef = useRef(null);
+  const typingTimerRef = useRef(null);
+  const roomId = getRoomId(patientData.id, chatDoctor.id);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  /* ── Check if a confirmed appointment exists ── */
+  useEffect(() => {
+    const checkAppointment = async () => {
+      const { data } = await supabase
+        .from('appointments')
+        .select('id, status')
+        .eq('patient_id', patientData.id)
+        .eq('doctor_id', chatDoctor.id)
+        .in('status', ['confirmed', 'completed'])
+        .limit(1);
+      setChatAllowed(data && data.length > 0);
+    };
+    checkAppointment();
+  }, [chatDoctor.id, patientData.id]);
+
+  /* ── Load messages + subscribe once access is confirmed ── */
+  useEffect(() => {
+    if (chatAllowed !== true) return;
+    loadMessages();
+    subscribeToMessages();
+
+    /* Optional: connect to the standalone WS server for presence/typing */
+    const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+    try {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          type: 'join', userId: patientData.id, role: 'patient',
+          doctorId: chatDoctor.id, patientId: patientData.id,
+        }));
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'presence' && msg.userId === chatDoctor.id) {
+          setDoctorOnline(msg.status === 'online');
+        }
+        if (msg.type === 'typing' && msg.userId === chatDoctor.id) {
+          setOtherTyping(msg.isTyping);
+        }
+      };
+      ws.onerror = () => { }; // WS optional — Supabase realtime is the primary
+    } catch (_) { }
+
+    return () => {
+      if (channelRef.current) supabase.removeChannel(channelRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [chatAllowed, roomId]);
+
+  useEffect(() => { scrollToBottom(); }, [messages]);
+
+  const loadMessages = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: true });
+    setMessages(data || []);
+    setLoading(false);
+    await supabase.from('messages')
+      .update({ is_read: true })
+      .eq('room_id', roomId)
+      .eq('receiver_id', patientData.id)
+      .eq('is_read', false);
+  };
+
+  const subscribeToMessages = () => {
+    const channel = supabase.channel(`room:${roomId}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'messages',
+        filter: `room_id=eq.${roomId}`,
+      }, (payload) => {
+        setMessages(prev => {
+          if (prev.find(m => m.id === payload.new.id)) return prev;
+          return [...prev, payload.new];
+        });
+        if (payload.new.receiver_id === patientData.id) {
+          supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
+        }
+      })
+      .subscribe();
+    channelRef.current = channel;
+  };
+
+  const [sendError, setSendError] = useState('');
+
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return;
+    const content = input.trim();
+    setInput('');
+    setSendError('');
+    setSending(true);
+    const optimistic = { id: `temp-${Date.now()}`, room_id: roomId, sender_id: patientData.id, receiver_id: chatDoctor.id, content, created_at: new Date().toISOString(), is_read: false };
+    setMessages(prev => [...prev, optimistic]);
+    // Stop typing indicator
+    if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'typing', isTyping: false }));
+    try {
+      const res = await fetch('/api/chat/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room_id: roomId, sender_id: patientData.id, receiver_id: chatDoctor.id, content }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to send');
+      setMessages(prev => prev.map(m => m.id === optimistic.id ? json.message : m));
+    } catch (e) {
+      setMessages(prev => prev.filter(m => m.id !== optimistic.id));
+      setInput(content);
+      setSendError(e.message || 'Could not send message. Please try again.');
+    } finally { setSending(false); }
+  };
+
+
+  const handleInputChange = (e) => {
+    setInput(e.target.value);
+    if (wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: 'typing', isTyping: true }));
+      clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => {
+        if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'typing', isTyping: false }));
+      }, 2000);
+    }
+  };
+
+  const formatMsgTime = (ts) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  };
+
+  /* ── Loading check ── */
+  if (chatAllowed === null) return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+      <div className="bg-white rounded-2xl p-8 flex flex-col items-center gap-3 shadow-2xl">
+        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-teal-600" />
+        <p className="text-sm text-gray-500">Checking access…</p>
+      </div>
+    </div>
+  );
+
+  /* ── Blocked state: no confirmed appointment ── */
+  if (chatAllowed === false) return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-7 text-center">
+        <div className="w-14 h-14 bg-amber-50 border-2 border-amber-200 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg className="w-7 h-7 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
+        </div>
+        <h3 className="text-base font-bold text-gray-900 mb-2">Chat Not Available</h3>
+        <p className="text-sm text-gray-500 mb-5 leading-relaxed">
+          Chat with <span className="font-semibold text-gray-700">Dr. {chatDoctor.name}</span> will be unlocked once they <span className="font-semibold text-teal-700">confirm your appointment</span>. Book an appointment first.
+        </p>
+        <button onClick={onClose} className="w-full py-2.5 bg-teal-700 text-white text-sm font-bold rounded-xl hover:bg-teal-800 transition">
+          Got it
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white w-full sm:max-w-md h-[90vh] sm:h-[600px] rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-teal-700 to-teal-600 px-4 py-3.5 flex items-center space-x-3 flex-shrink-0">
+          {chatDoctor.avatar_url
+            ? <img src={chatDoctor.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover ring-2 ring-white/30" />
+            : <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold">{chatDoctor.name?.charAt(0)}</span></div>}
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-white text-sm">Dr. {chatDoctor.name}</p>
+            <p className="text-teal-200 text-xs truncate">{chatDoctor.specialization}</p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${doctorOnline ? 'bg-green-400' : 'bg-gray-400'}`}></span>
+            <span className="text-teal-200 text-xs">{doctorOnline ? 'Online' : 'Offline'}</span>
+          </div>
+          <button onClick={onClose} className="ml-2 w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition flex-shrink-0">
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+          {loading ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-600" />
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+              <div className="w-14 h-14 bg-teal-100 rounded-full flex items-center justify-center mb-3">
+                <svg className="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+              </div>
+              <p className="text-sm font-semibold text-gray-700">Start the conversation</p>
+              <p className="text-xs text-gray-400 mt-1">Send a message to Dr. {chatDoctor.name?.split(' ')[0]}</p>
+            </div>
+          ) : (
+            <>
+              {messages.map((msg) => {
+                const isMine = msg.sender_id === patientData.id;
+                return (
+                  <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                    {!isMine && (
+                      <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 self-end mb-1">
+                        {chatDoctor.name?.charAt(0)}
+                      </div>
+                    )}
+                    <div className={`max-w-[72%] ${isMine ? 'items-end' : 'items-start'} flex flex-col`}>
+                      <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed ${isMine
+                        ? 'bg-teal-700 text-white rounded-br-sm'
+                        : 'bg-white text-gray-800 border border-gray-100 shadow-sm rounded-bl-sm'
+                        }`}>
+                        {msg.content}
+                      </div>
+                      <p className={`text-[10px] mt-1 ${isMine ? 'text-gray-400 text-right' : 'text-gray-400'}`}>
+                        {formatMsgTime(msg.created_at)}
+                        {isMine && <span className="ml-1">{msg.is_read ? '✓✓' : '✓'}</span>}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </>
+          )}
+        </div>
+
+        {/* Typing indicator */}
+        {otherTyping && (
+          <div className="px-4 pb-1 flex items-center gap-2 flex-shrink-0">
+            <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+              {chatDoctor.name?.charAt(0)}
+            </div>
+            <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-bl-sm px-3.5 py-2 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
+        {/* Error toast */}
+        {sendError && (
+          <div className="px-4 py-2 bg-red-50 border-t border-red-100 flex-shrink-0">
+            <p className="text-xs text-red-600">{sendError}</p>
+          </div>
+        )}
+        {/* Input */}
+
+        <div className="px-4 py-3 bg-white border-t border-gray-100 flex-shrink-0">
+          <div className="flex items-center space-x-2">
+            <input
+              type="text"
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+              placeholder={`Message Dr. ${chatDoctor.name?.split(' ')[0]}…`}
+              className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+            />
+            <button onClick={sendMessage} disabled={!input.trim() || sending}
+              className="w-10 h-10 bg-teal-700 text-white rounded-xl flex items-center justify-center hover:bg-teal-800 transition disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0">
+              {sending
+                ? <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
+                : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════
+   MY DOCTORS VIEW — clean cards: photo · name · dept · icons
+══════════════════════════════════════════════════ */
+function MyDoctorsView({ patientData, onChat, onDetails }) {
+  const [myDoctors, setMyDoctors] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { fetchMyDoctors(); }, []);
+
+  const fetchMyDoctors = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('appointments')
+      .select('doctor_id, status, time_slot:slot_id(date), doctor:doctor_id(id,name,specialization,avatar_url,experience_years,consultation_fee,clinic_place_name,clinic_address,clinic_lat,clinic_lng,languages,experience_details,certificate_url,certificate_name,doctor_id)')
+      .eq('patient_id', patientData.id)
+      .in('status', ['confirmed', 'completed'])
+      .order('created_at', { ascending: false });
+
+    if (data) {
+      const seen = new Set();
+      const unique = [];
+      data.forEach(apt => {
+        if (apt.doctor && !seen.has(apt.doctor_id)) {
+          seen.add(apt.doctor_id);
+          unique.push({ ...apt.doctor, lastVisit: apt.time_slot?.date });
+        }
+      });
+      setMyDoctors(unique);
+    }
+    setLoading(false);
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-600" />
+    </div>
+  );
+
+  return (
+    <div className="p-7">
+      <div className="mb-5">
+        <h2 className="text-lg font-bold text-gray-900">My Doctors</h2>
+        <p className="text-xs text-gray-400 mt-0.5">{myDoctors.length} doctor{myDoctors.length !== 1 ? 's' : ''} from your appointments</p>
+      </div>
+
+      {myDoctors.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-100 py-16 text-center">
+          <div className="w-14 h-14 bg-teal-50 rounded-full flex items-center justify-center mx-auto mb-3">
+            <svg className="w-7 h-7 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+          </div>
+          <p className="text-sm font-semibold text-gray-700">No doctors yet</p>
+          <p className="text-xs text-gray-400 mt-1">Doctors who confirm your appointments will appear here</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          {myDoctors.map(doc => (
+            <div key={doc.id} className="bg-white rounded-2xl border border-gray-100 hover:shadow-md hover:border-teal-100 transition-all flex flex-col items-center pt-6 pb-4 px-4 gap-3 group">
+
+              {/* Profile photo */}
+              <div className="relative">
+                {doc.avatar_url
+                  ? <img src={doc.avatar_url} alt="" className="w-20 h-20 rounded-full object-cover ring-4 ring-teal-50 shadow-sm group-hover:ring-teal-200 transition" />
+                  : <div className="w-20 h-20 bg-gradient-to-br from-teal-500 to-teal-700 rounded-full flex items-center justify-center ring-4 ring-teal-50 shadow-sm group-hover:ring-teal-200 transition">
+                      <span className="text-white font-bold text-2xl">{doc.name?.charAt(0)}</span>
+                    </div>}
+                {/* Verified dot */}
+                <span className="absolute bottom-0.5 right-0.5 w-5 h-5 bg-green-500 border-2 border-white rounded-full flex items-center justify-center">
+                  <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                </span>
+              </div>
+
+              {/* Name & department */}
+              <div className="text-center min-w-0 w-full">
+                <p className="text-sm font-bold text-gray-900 truncate">Dr. {doc.name}</p>
+                <p className="text-xs text-teal-600 font-medium truncate mt-0.5">{doc.specialization}</p>
+              </div>
+
+              {/* Action icon buttons */}
+              <div className="flex items-center gap-2 mt-1">
+                {/* Details / user icon */}
+                <button
+                  onClick={() => onDetails(doc)}
+                  title="View details"
+                  className="w-9 h-9 rounded-xl bg-gray-50 hover:bg-teal-50 border border-gray-200 hover:border-teal-200 text-gray-400 hover:text-teal-700 flex items-center justify-center transition-all">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </button>
+
+                {/* Chat icon */}
+                <button
+                  onClick={() => onChat(doc)}
+                  title="Chat"
+                  className="w-9 h-9 rounded-xl bg-teal-600 hover:bg-teal-700 border border-teal-600 text-white flex items-center justify-center transition-all shadow-sm">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </button>
+              </div>
+
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════
+   MESSAGES VIEW — list of all chat conversations
+══════════════════════════════════════════════════ */
+function MessagesView({ patientData, doctors, onOpenChat }) {
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { fetchConversations(); }, []);
+
+  const fetchConversations = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`sender_id.eq.${patientData.id},receiver_id.eq.${patientData.id}`)
+      .order('created_at', { ascending: false });
+
+    if (data) {
+      const convMap = {};
+      data.forEach(msg => {
+        const otherId = msg.sender_id === patientData.id ? msg.receiver_id : msg.sender_id;
+        if (!convMap[otherId]) {
+          const doc = doctors.find(d => d.id === otherId);
+          convMap[otherId] = { doctor: doc, lastMsg: msg, unread: 0 };
+        }
+        if (msg.receiver_id === patientData.id && !msg.is_read) {
+          convMap[otherId].unread = (convMap[otherId].unread || 0) + 1;
+        }
+      });
+      setConversations(Object.values(convMap).filter(c => c.doctor));
+    }
+    setLoading(false);
+  };
+
+  const formatTime = (ts) => {
+    const d = new Date(ts);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    }
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-600" />
+    </div>
+  );
+
+  return (
+    <div className="p-7 max-w-2xl">
+      <div className="flex items-center justify-between mb-5">
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        {conversations.length === 0 ? (
+          <div className="py-16 text-center">
+            <div className="w-14 h-14 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-700">No messages yet</p>
+            <p className="text-xs text-gray-400 mt-1">Start a chat from the Find Doctors section</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {conversations.map(({ doctor, lastMsg, unread }) => (
+              <button key={doctor.id} onClick={() => onOpenChat(doctor)}
+                className="w-full flex items-center space-x-3 px-5 py-4 hover:bg-gray-50 transition text-left">
+                {doctor.avatar_url
+                  ? <img src={doctor.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                  : <div className="w-11 h-11 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold">{doctor.name?.charAt(0)}</span></div>}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-gray-900 text-sm">Dr. {doctor.name}</p>
+                    <p className="text-xs text-gray-400">{formatTime(lastMsg.created_at)}</p>
+                  </div>
+                  <div className="flex items-center justify-between mt-0.5">
+                    <p className="text-xs text-gray-500 truncate pr-2">
+                      {lastMsg.sender_id === patientData.id ? 'You: ' : ''}{lastMsg.content}
+                    </p>
+                    {unread > 0 && (
+                      <span className="min-w-[18px] h-[18px] bg-teal-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 flex-shrink-0">
+                        {unread}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-teal-600 mt-0.5">{doctor.specialization}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════
+   MAIN PATIENT DASHBOARD
+══════════════════════════════════════════════════ */
 export default function PatientDashboard() {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [patientData, setPatientData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [viewingDoctor, setViewingDoctor] = useState(null);
+  const [chatDoctor, setChatDoctor] = useState(null);
 
   const [currentView, setCurrentView] = useState('dashboard');
   const [selectedDoctor, setSelectedDoctor] = useState(null);
@@ -44,14 +688,24 @@ export default function PatientDashboard() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef(null);
-  const notifRef      = useRef(null);
-  const profileRef    = useRef(null);
+  const notifRef = useRef(null);
+  const profileRef = useRef(null);
 
-  // Patient health details state (separate table)
+  // Health details state
   const [healthDetails, setHealthDetails] = useState(null);
   const [isEditingHealth, setIsEditingHealth] = useState(false);
   const [healthForm, setHealthForm] = useState({});
   const [savingHealth, setSavingHealth] = useState(false);
+
+  // ── Nearby filter state ───────────────────────────────────────
+  const [patientLocation, setPatientLocation] = useState(null); // { lat, lng }
+  const [nearbyRadius, setNearbyRadius] = useState(10); // km
+  const [nearbyMode, setNearbyMode] = useState(false);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
+  const [nearbyError, setNearbyError] = useState('');
+
+  // ── Unread messages badge ─────────────────────────────────────
+  const [unreadMsgCount, setUnreadMsgCount] = useState(0);
 
   const specialties = [
     { id: 'all', name: 'All' },
@@ -75,6 +729,7 @@ export default function PatientDashboard() {
         fetchNotifications();
         fetchPendingRequests();
         fetchHealthDetails();
+        fetchUnreadMsgCount();
       }
     }
   }, [isAuthenticated, patientData?.id]);
@@ -110,12 +765,45 @@ export default function PatientDashboard() {
     }
   }, [healthDetails]);
 
+  // Real-time
+  useEffect(() => {
+    if (!patientData?.id) return;
+    const ch = supabase.channel('patient-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `patient_id=eq.${patientData.id}` }, () => fetchAppointments())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'medical_records', filter: `patient_id=eq.${patientData.id}` }, () => fetchMedicalRecords())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${patientData.id}` }, () => { fetchNotifications(); fetchAppointments(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'record_requests', filter: `patient_id=eq.${patientData.id}` }, () => fetchPendingRequests())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'patient_health_details', filter: `patient_id=eq.${patientData.id}` }, () => fetchHealthDetails())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${patientData.id}` }, () => fetchUnreadMsgCount())
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [patientData?.id]);
+
+  // Click-outside
+  useEffect(() => {
+    const handle = (e) => {
+      if (notifRef.current && !notifRef.current.contains(e.target)) setShowNotifications(false);
+      if (profileRef.current && !profileRef.current.contains(e.target)) setShowProfileMenu(false);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, []);
+
   // ── Data Fetchers ─────────────────────────────────────────────
+  const fetchUnreadMsgCount = async () => {
+    if (!patientData?.id) return;
+    const { count } = await supabase.from('messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('receiver_id', patientData.id)
+      .eq('is_read', false);
+    setUnreadMsgCount(count || 0);
+  };
+
   const fetchPendingRequests = async () => {
     if (!patientData?.id) return;
     const { data } = await supabase
       .from('record_requests')
-      .select('*, doctor:doctor_id(name, specialization)')
+      .select('*, doctor:doctor_id(name, specialization, avatar_url)')
       .eq('patient_id', patientData.id).eq('status', 'pending')
       .order('created_at', { ascending: false });
     if (data) setPendingRequests(data);
@@ -147,7 +835,7 @@ export default function PatientDashboard() {
   const fetchMedicalRecords = async () => {
     if (!patientData?.id) return;
     const { data } = await supabase.from('medical_records')
-      .select('*, doctor:doctor_id(name, specialization)')
+      .select('*, doctor:doctor_id(name, specialization, avatar_url)')
       .eq('patient_id', patientData.id).order('created_at', { ascending: false });
     if (data) setMedicalRecords(data);
   };
@@ -163,14 +851,12 @@ export default function PatientDashboard() {
     if (!patientData?.id) return;
     setSavingHealth(true);
     try {
-      // Calculate BMI automatically if height and weight provided
       let bmi = healthForm.bmi;
       if (healthForm.height_cm && healthForm.weight_kg) {
         const h = parseFloat(healthForm.height_cm) / 100;
         const w = parseFloat(healthForm.weight_kg);
         bmi = h > 0 ? (w / (h * h)).toFixed(1) : bmi;
       }
-
       const payload = {
         patient_id: patientData.id,
         height_cm: healthForm.height_cm ? parseFloat(healthForm.height_cm) : null,
@@ -185,18 +871,14 @@ export default function PatientDashboard() {
         notes: healthForm.notes || null,
         updated_at: new Date().toISOString(),
       };
-
       if (healthDetails?.id) {
-        const { error } = await supabase.from('patient_health_details')
-          .update(payload).eq('id', healthDetails.id);
+        const { error } = await supabase.from('patient_health_details').update(payload).eq('id', healthDetails.id);
         if (error) throw error;
       } else {
-        const { data, error } = await supabase.from('patient_health_details')
-          .insert([payload]).select().single();
+        const { data, error } = await supabase.from('patient_health_details').insert([payload]).select().single();
         if (error) throw error;
         setHealthDetails(data);
       }
-
       setHealthDetails({ ...healthDetails, ...payload, bmi });
       setIsEditingHealth(false);
     } catch (err) {
@@ -205,34 +887,11 @@ export default function PatientDashboard() {
     } finally { setSavingHealth(false); }
   };
 
-  // Real-time
-  useEffect(() => {
-    if (!patientData?.id) return;
-    const ch = supabase.channel('patient-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `patient_id=eq.${patientData.id}` }, () => fetchAppointments())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'medical_records', filter: `patient_id=eq.${patientData.id}` }, () => fetchMedicalRecords())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${patientData.id}` }, () => { fetchNotifications(); fetchAppointments(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'record_requests', filter: `patient_id=eq.${patientData.id}` }, () => fetchPendingRequests())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'patient_health_details', filter: `patient_id=eq.${patientData.id}` }, () => fetchHealthDetails())
-      .subscribe();
-    return () => supabase.removeChannel(ch);
-  }, [patientData?.id]);
-
-  // Click-outside — close both dropdowns
-  useEffect(() => {
-    const handle = (e) => {
-      if (notifRef.current   && !notifRef.current.contains(e.target))   setShowNotifications(false);
-      if (profileRef.current && !profileRef.current.contains(e.target)) setShowProfileMenu(false);
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, []);
-
   // ── Profile Image Upload ──────────────────────────────────────
   const handleAvatarUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !patientData?.id) return;
-    if (!['image/jpeg','image/jpg','image/png','image/webp'].includes(file.type)) { alert('Please select a JPEG, PNG, or WebP image.'); return; }
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) { alert('Please select a JPEG, PNG, or WebP image.'); return; }
     if (file.size > 2 * 1024 * 1024) { alert('Image must be smaller than 2 MB.'); return; }
     try {
       setAvatarUploading(true);
@@ -324,7 +983,7 @@ export default function PatientDashboard() {
   };
 
   const fetchDoctors = async () => {
-    const { data } = await supabase.from('users').select('*').eq('role', 'doctor').eq('is_approved', true);
+    const { data } = await supabase.from('users').select('id,name,email,specialization,avatar_url,certificate_url,certificate_name,experience_years,experience_details,languages,consultation_fee,clinic_place_name,clinic_address,clinic_lat,clinic_lng,doctor_id').eq('role', 'doctor').eq('is_approved', true);
     if (data) setDoctors(data);
   };
 
@@ -353,7 +1012,7 @@ export default function PatientDashboard() {
   const fetchTimeSlots = async () => {
     try {
       setLoading(true);
-      const ranges = { morning: ['06:00:00','12:00:00'], afternoon: ['12:00:00','17:00:00'], evening: ['17:00:00','22:00:00'] };
+      const ranges = { morning: ['06:00:00', '12:00:00'], afternoon: ['12:00:00', '17:00:00'], evening: ['17:00:00', '22:00:00'] };
       const [gte, lt] = ranges[selectedTimeOfDay];
       const { data } = await supabase.from('time_slots').select('*')
         .eq('doctor_id', selectedDoctor.id).eq('date', selectedDate).eq('is_available', true)
@@ -393,17 +1052,52 @@ export default function PatientDashboard() {
     router.push('/Login');
   };
 
+  // ── Nearby Doctor Filter ──────────────────────────────────────
+  const getPatientLocation = () => {
+    if (!navigator.geolocation) { setNearbyError('Geolocation is not supported by your browser.'); return; }
+    setNearbyLoading(true);
+    setNearbyError('');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setPatientLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setNearbyMode(true);
+        setNearbyLoading(false);
+      },
+      (err) => {
+        setNearbyError('Could not get your location: ' + err.message);
+        setNearbyLoading(false);
+      }
+    );
+  };
+
+  const clearNearbyFilter = () => {
+    setNearbyMode(false);
+    setPatientLocation(null);
+    setNearbyError('');
+  };
+
   // ── Derived ───────────────────────────────────────────────────
-  const filteredDoctors = doctors.filter(d => {
+  const doctorsWithDistance = doctors.map(d => {
+    if (patientLocation && d.clinic_lat && d.clinic_lng) {
+      return { ...d, _distance: haversineDistance(patientLocation.lat, patientLocation.lng, parseFloat(d.clinic_lat), parseFloat(d.clinic_lng)) };
+    }
+    return { ...d, _distance: null };
+  });
+
+  const filteredDoctors = doctorsWithDistance.filter(d => {
     const sm = selectedSpecialty === 'all' || d.specialization?.toLowerCase() === selectedSpecialty;
     const qm = d.name?.toLowerCase().includes(searchQuery.toLowerCase()) || d.specialization?.toLowerCase().includes(searchQuery.toLowerCase());
-    return sm && qm;
+    const nm = !nearbyMode || (d._distance != null && d._distance <= nearbyRadius);
+    return sm && qm && nm;
+  }).sort((a, b) => {
+    if (nearbyMode && a._distance != null && b._distance != null) return a._distance - b._distance;
+    return 0;
   });
 
   const upcomingAppointments = appointments.filter(a =>
-    (a.status === 'scheduled' || a.status === 'confirmed') && new Date(a.time_slot?.date) >= new Date().setHours(0,0,0,0));
+    (a.status === 'scheduled' || a.status === 'confirmed') && new Date(a.time_slot?.date) >= new Date().setHours(0, 0, 0, 0));
   const pastAppointments = appointments.filter(a =>
-    a.status === 'completed' || (new Date(a.time_slot?.date) < new Date().setHours(0,0,0,0) && a.status !== 'cancelled'));
+    a.status === 'completed' || (new Date(a.time_slot?.date) < new Date().setHours(0, 0, 0, 0) && a.status !== 'cancelled'));
   const cancelledAppointments = appointments.filter(a => a.status === 'cancelled' || a.status === 'rejected');
   const displayAppointments = activeTab === 'past' ? pastAppointments : activeTab === 'cancelled' ? cancelledAppointments : upcomingAppointments;
   const todayAppointments = upcomingAppointments.filter(a => new Date(a.time_slot?.date).toDateString() === new Date().toDateString());
@@ -446,7 +1140,6 @@ export default function PatientDashboard() {
     return { label: 'Obese', cls: 'text-red-600' };
   };
 
-  // ── Avatar component ──────────────────────────────────────────
   const AvatarImg = ({ size = 'sm' }) => {
     const cls = { sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm' }[size];
     return patientData?.avatar_url ? (
@@ -462,7 +1155,9 @@ export default function PatientDashboard() {
     { id: 'dashboard', label: 'Dashboard', d: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
     { id: 'appointments', label: 'Appointments', badge: upcomingAppointments.length, d: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
     { id: 'doctors', label: 'Find Doctors', d: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
+    { id: 'mydoctors', label: 'My Doctors', d: 'M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z' },
     { id: 'records', label: 'Medical Records', d: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+    { id: 'messages', label: 'Messages', badge: unreadMsgCount, d: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
     { id: 'profile', label: 'Profile', d: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
   ];
 
@@ -485,19 +1180,14 @@ export default function PatientDashboard() {
 
       {/* ── Sidebar ── */}
       <aside className="fixed left-0 top-0 h-full w-60 bg-white border-r border-gray-100 z-40 flex flex-col">
-        {/* Logo */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center">
           <img src="/amrt-logo.png" alt="AMRT" className="h-7 w-auto object-contain"
             onError={e => { e.target.style.display = 'none'; }} />
         </div>
-
-        {/* Nav items */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {navItems.map(item => (
             <button key={item.id} onClick={() => setCurrentView(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-sm ${
-                currentView === item.id ? 'bg-teal-700 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'
-              }`}>
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-sm ${currentView === item.id ? 'bg-teal-700 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'}`}>
               <div className="flex items-center space-x-2.5">
                 <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={item.d} />
@@ -512,13 +1202,11 @@ export default function PatientDashboard() {
             </button>
           ))}
         </nav>
-
-
       </aside>
 
       {/* ── Main ── */}
       <main className="ml-60 min-h-screen">
-        {/* Header — includes profile pic */}
+        {/* Header */}
         <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
           <div className="px-7 py-3.5 flex items-center justify-between">
             <div>
@@ -526,7 +1214,9 @@ export default function PatientDashboard() {
                 {currentView === 'dashboard' && `Welcome back, ${patientData?.name?.split(' ')[0]}`}
                 {currentView === 'appointments' && 'My Appointments'}
                 {currentView === 'doctors' && 'Find Doctors'}
+                {currentView === 'mydoctors' && 'My Doctors'}
                 {currentView === 'records' && 'Medical Records'}
+                {currentView === 'messages' && 'Messages'}
                 {currentView === 'profile' && 'My Profile'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
@@ -534,13 +1224,13 @@ export default function PatientDashboard() {
               </p>
             </div>
             <div className="flex items-center space-x-2">
-              {/* ── Notification Bell ── */}
+              {/* Notification Bell */}
               <div className="relative" ref={notifRef}>
                 <button
                   onClick={() => { setShowNotifications(v => !v); setShowProfileMenu(false); }}
                   className="relative w-9 h-9 bg-gray-50 hover:bg-gray-100 rounded-xl flex items-center justify-center transition">
                   <svg className="w-[18px] h-[18px] text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                   </svg>
                   {(notifications.length + pendingRequests.length) > 0 && (
                     <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
@@ -550,90 +1240,49 @@ export default function PatientDashboard() {
                 </button>
 
                 {showNotifications && (
-                  <div className="absolute right-0 mt-2 w-96 bg-white rounded-2xl shadow-2xl border border-gray-100 z-50 overflow-hidden">
-                    {/* Header */}
+                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 z-50 overflow-hidden">
                     <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Notifications</span>
-                        {(notifications.length + pendingRequests.length) > 0 && (
-                          <span className="bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-0.5 rounded-full">
-                            {notifications.length + pendingRequests.length}
-                          </span>
-                        )}
-                      </div>
+                      <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Notifications</span>
                       {notifications.length > 1 && (
-                        <button onClick={markAllRead} className="text-[11px] text-teal-600 hover:text-teal-700 font-semibold transition">
-                          Mark all read
-                        </button>
+                        <button onClick={markAllRead} className="text-[11px] text-teal-600 hover:text-teal-700 font-semibold transition">Mark all read</button>
                       )}
                     </div>
-
-                    <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-50">
+                    <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
                       {notifications.length === 0 && pendingRequests.length === 0 ? (
                         <div className="py-10 text-center">
-                          <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                            <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                            </svg>
-                          </div>
                           <p className="text-sm font-semibold text-gray-500">All caught up!</p>
                           <p className="text-xs text-gray-400 mt-0.5">No new notifications</p>
                         </div>
                       ) : (
                         <>
-                          {/* System / appointment notifications */}
-                          {notifications.map(notif => {
-                            const isConfirmed = notif.type === 'appointment_confirmed';
-                            const isRejected  = notif.type === 'appointment_rejected' || notif.type === 'appointment_cancelled';
-                            const isRecord    = notif.type === 'new_record';
-                            const cfg = isConfirmed
-                              ? { accent: 'border-l-teal-400',  iconBg: 'bg-teal-50',  iconTxt: 'text-teal-600',  d: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z',  label: 'teal'  }
-                              : isRejected
-                              ? { accent: 'border-l-red-400',   iconBg: 'bg-red-50',   iconTxt: 'text-red-500',   d: 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z', label: 'red' }
-                              : { accent: 'border-l-violet-400',iconBg: 'bg-violet-50',iconTxt: 'text-violet-600',d: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', label: 'violet' };
-                            return (
-                              <div key={notif.id} className={`px-4 py-3.5 border-l-4 ${cfg.accent} hover:bg-gray-50 transition group`}>
-                                <div className="flex items-start gap-3">
-                                  <div className={`w-8 h-8 ${cfg.iconBg} rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5`}>
-                                    <svg className={`w-4 h-4 ${cfg.iconTxt}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={cfg.d}/>
-                                    </svg>
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-bold text-gray-900">{notif.title}</p>
-                                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">{notif.message}</p>
-                                    <p className="text-[11px] text-gray-400 mt-1.5">
-                                      {new Date(notif.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
-                                    </p>
-                                  </div>
-                                  {/* ✓ Mark read button */}
-                                  <button
-                                    onClick={() => markRead(notif.id)}
-                                    title="Mark as read"
-                                    className="flex-shrink-0 opacity-0 group-hover:opacity-100 w-6 h-6 rounded-full bg-gray-100 hover:bg-teal-100 text-gray-400 hover:text-teal-600 flex items-center justify-center transition mt-0.5">
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/>
-                                    </svg>
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                          {/* Pending doc requests */}
-                          {pendingRequests.map(req => (
-                            <div key={req.id}
-                              className="px-4 py-3.5 border-l-4 border-l-amber-400 hover:bg-amber-50 cursor-pointer transition"
-                              onClick={() => { setSelectedRequest(req); setShowUploadModal(true); setShowNotifications(false); }}>
+                          {notifications.map(notif => (
+                            <div key={notif.id} className="px-4 py-3 hover:bg-gray-50 transition">
                               <div className="flex items-start gap-3">
-                                <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
-                                  <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                <div className="w-8 h-8 bg-teal-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                                  <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                   </svg>
                                 </div>
                                 <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold text-gray-900">{notif.title}</p>
+                                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{notif.message}</p>
+                                </div>
+                                <button onClick={() => markRead(notif.id)} className="text-gray-300 hover:text-gray-500 transition flex-shrink-0">
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                          {pendingRequests.map(req => (
+                            <div key={req.id} className="px-4 py-3 hover:bg-amber-50 transition cursor-pointer"
+                              onClick={() => { setSelectedRequest(req); setShowUploadModal(true); setShowNotifications(false); }}>
+                              <div className="flex items-start gap-3">
+                                <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                                  <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                                </div>
+                                <div className="flex-1 min-w-0">
                                   <p className="text-xs font-bold text-gray-900">Document Requested</p>
-                                  <p className="text-xs text-gray-600 mt-0.5">{req.request_type} · Dr. {req.doctor?.name}</p>
-                                  <p className="text-[11px] text-amber-600 font-semibold mt-1.5">Tap to upload →</p>
+                                  <p className="text-xs text-gray-500 mt-0.5">Dr. {req.doctor?.name} needs: {req.request_type}</p>
                                 </div>
                               </div>
                             </div>
@@ -645,36 +1294,35 @@ export default function PatientDashboard() {
                 )}
               </div>
 
-              {/* ── Profile pill ── */}
+              {/* Profile menu */}
               <div className="relative" ref={profileRef}>
                 <button
                   onClick={() => { setShowProfileMenu(v => !v); setShowNotifications(false); }}
-                  className="flex items-center space-x-2 bg-gray-50 hover:bg-gray-100 px-2.5 py-1.5 rounded-xl transition">
-                  <AvatarImg size="sm" />
-                  <div className="hidden sm:block text-left">
-                    <p className="text-xs font-semibold text-gray-900 leading-tight">{patientData?.name}</p>
-                    <p className="text-xs text-gray-400 leading-tight">Patient</p>
-                  </div>
-                  <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
-                  </svg>
+                  className="flex items-center space-x-2 px-2 py-1.5 rounded-xl hover:bg-gray-50 transition">
+                  {avatarUploading ? (
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+                      <div className="w-4 h-4 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : <AvatarImg size="sm" />}
+                  <span className="text-sm font-semibold text-gray-700 hidden sm:block">{patientData?.name?.split(' ')[0]}</span>
                 </button>
                 {showProfileMenu && (
-                  <div className="absolute right-0 mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
-                    <button onClick={() => { setCurrentView('profile'); setShowProfileMenu(false); }}
-                      className="w-full flex items-center space-x-2.5 px-4 py-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition">
-                      <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-                      </svg>
-                      <span>My Profile</span>
+                  <div className="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-lg border border-gray-100 z-50 overflow-hidden py-1">
+                    <button onClick={() => { avatarInputRef.current?.click(); setShowProfileMenu(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition">
+                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /></svg>
+                      Change Photo
                     </button>
-                    <div className="border-t border-gray-100"/>
+                    <button onClick={() => { setCurrentView('profile'); setShowProfileMenu(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition">
+                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                      My Profile
+                    </button>
+                    <div className="border-t border-gray-100 my-1" />
                     <button onClick={handleLogout}
-                      className="w-full flex items-center space-x-2.5 px-4 py-3 text-xs font-semibold text-red-500 hover:bg-red-50 transition">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                      </svg>
-                      <span>Sign Out</span>
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                      Sign Out
                     </button>
                   </div>
                 )}
@@ -685,165 +1333,148 @@ export default function PatientDashboard() {
 
         {/* ══════════ DASHBOARD ══════════ */}
         {currentView === 'dashboard' && (
-          <div className="p-7 space-y-5">
+          <div className="p-7 space-y-6">
+            {/* Hero */}
+            <div className="bg-gradient-to-r from-teal-700 to-teal-500 rounded-xl p-6 text-white relative overflow-hidden">
+              <div className="relative z-10">
+                <p className="text-teal-200 text-sm mb-1">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'},</p>
+                <h2 className="text-2xl font-bold">{patientData?.name}</h2>
+                <p className="text-teal-200 text-sm mt-1">
+                  {upcomingAppointments.length > 0
+                    ? `You have ${upcomingAppointments.length} upcoming appointment${upcomingAppointments.length > 1 ? 's' : ''}`
+                    : 'No upcoming appointments'}
+                </p>
+              </div>
+              <div className="absolute right-0 top-0 w-32 h-full opacity-10">
+                <svg viewBox="0 0 100 100" className="w-full h-full"><circle cx="80" cy="20" r="40" fill="white" /><circle cx="30" cy="80" r="30" fill="white" /></svg>
+              </div>
+            </div>
+
+            {/* Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { label: 'Upcoming', value: upcomingAppointments.length, sub: upcomingAppointments[0]?.time_slot?.date ? `Next: ${formatDate(upcomingAppointments[0].time_slot.date, {month:'short',day:'numeric'})}` : 'None scheduled', cl: 'border-l-teal-500' },
-                { label: 'Total Appointments', value: appointments.length, sub: `${pastAppointments.length} completed`, cl: 'border-l-sky-500' },
-                { label: 'Available Doctors', value: doctors.length, sub: `${specialties.length - 1} specialties`, cl: 'border-l-violet-400' },
-                { label: 'Medical Records', value: medicalRecords.length, sub: 'Documents & reports', cl: 'border-l-amber-400' },
-              ].map((s, i) => (
-                <div key={i} className={`bg-white rounded-xl p-5 border border-gray-100 border-l-4 ${s.cl}`}>
+                { label: "Today's Appointments", value: todayAppointments.length, color: 'border-l-blue-500', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+                { label: 'Upcoming', value: upcomingAppointments.length, color: 'border-l-teal-500', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+                { label: 'Medical Records', value: medicalRecords.length, color: 'border-l-purple-500', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+                { label: 'Doctors Available', value: doctors.length, color: 'border-l-green-500', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
+              ].map(s => (
+                <div key={s.label} className={`bg-white rounded-xl p-5 border border-gray-100 border-l-4 ${s.color}`}>
                   <h3 className="text-2xl font-bold text-gray-900">{s.value}</h3>
                   <p className="text-xs font-semibold text-gray-600 mt-1">{s.label}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
                 </div>
               ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100">
-                <div className="px-5 py-4 flex items-center justify-between border-b border-gray-50">
+            {/* Today's appointments */}
+            {todayAppointments.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
                   <h2 className="text-sm font-bold text-gray-900">Today's Appointments</h2>
-                  <button onClick={() => setCurrentView('appointments')} className="text-xs text-teal-600 font-semibold hover:text-teal-700">View all</button>
+                  <button onClick={() => setCurrentView('appointments')} className="text-xs text-teal-600 font-semibold">View all</button>
                 </div>
-                <div className="p-5">
-                  {todayAppointments.length > 0 ? (
-                    <div className="space-y-3">
-                      {todayAppointments.map(apt => (
-                        <div key={apt.id} className="p-4 bg-teal-50 rounded-xl border border-teal-100">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0">
-                              <span className="text-white font-bold text-sm">{apt.doctor?.name?.charAt(0)}</span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-semibold text-gray-900">Dr. {apt.doctor?.name}</p>
-                              <p className="text-xs text-gray-500">{apt.doctor?.specialization}</p>
-                            </div>
-                            <div className="text-right flex-shrink-0">
-                              <p className="text-sm font-bold text-teal-700">{formatTime(apt.time_slot?.start_time)}</p>
-                              <span className={`text-xs font-medium ${apt.status === 'confirmed' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                {apt.status === 'confirmed' ? 'Confirmed' : 'Pending'}
-                              </span>
-                            </div>
-                          </div>
-                          {/* Token + Report time row */}
-                          {apt.token_number && apt.status === 'confirmed' && (
-                            <div className="mt-3 pt-3 border-t border-teal-100 flex items-center gap-2 flex-wrap">
-                              <span className="inline-flex items-center gap-1.5 bg-white border border-teal-200 text-teal-700 text-xs font-bold px-2.5 py-1 rounded-full">
-                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
-                                Token #{apt.token_number}
-                              </span>
-                              {apt.report_time && (
-                                <span className="inline-flex items-center gap-1.5 bg-white border border-blue-200 text-blue-700 text-xs font-semibold px-2.5 py-1 rounded-full">
-                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                  Report at {apt.report_time}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                <div className="divide-y divide-gray-50">
+                  {todayAppointments.map(apt => (
+                    <div key={apt.id} className="px-5 py-3.5 flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-9 h-9 bg-teal-700 rounded-full flex items-center justify-center">
+                          <span className="text-white font-bold text-sm">{apt.doctor?.name?.charAt(0)}</span>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                        <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">Dr. {apt.doctor?.name}</p>
+                          <p className="text-xs text-gray-500">{apt.doctor?.specialization} · {formatTime(apt.time_slot?.start_time)}</p>
+                        </div>
                       </div>
-                      <p className="text-sm text-gray-500 mb-3">No appointments today</p>
-                      <button onClick={() => setCurrentView('doctors')} className="px-4 py-2 bg-teal-700 text-white rounded-lg text-xs font-semibold hover:bg-teal-800 transition">
-                        Book Appointment
-                      </button>
+                      <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize border ${statusCls(apt.status)}`}>{apt.status}</span>
                     </div>
-                  )}
+                  ))}
                 </div>
               </div>
+            )}
 
+            {/* Quick actions */}
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => setCurrentView('doctors')}
+                className="bg-white rounded-xl border border-gray-100 p-5 text-left hover:border-teal-200 hover:shadow-sm transition group">
+                <div className="w-10 h-10 bg-teal-100 rounded-xl flex items-center justify-center mb-3 group-hover:bg-teal-200 transition">
+                  <svg className="w-5 h-5 text-teal-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                </div>
+                <p className="font-bold text-gray-900 text-sm">Find a Doctor</p>
+                <p className="text-xs text-gray-500 mt-0.5">{doctors.length} doctors available nearby</p>
+              </button>
+              <button onClick={() => setCurrentView('records')}
+                className="bg-white rounded-xl border border-gray-100 p-5 text-left hover:border-purple-200 hover:shadow-sm transition group">
+                <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center mb-3 group-hover:bg-purple-200 transition">
+                  <svg className="w-5 h-5 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                </div>
+                <p className="font-bold text-gray-900 text-sm">Medical Records</p>
+                <p className="text-xs text-gray-500 mt-0.5">{medicalRecords.length} records stored</p>
+              </button>
             </div>
           </div>
         )}
 
         {/* ══════════ APPOINTMENTS ══════════ */}
         {currentView === 'appointments' && (
-          <div className="p-7">
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <div className="border-b border-gray-100 px-5 flex items-center">
-                {[{id:'upcoming',label:'Upcoming',count:upcomingAppointments.length},{id:'past',label:'Completed',count:pastAppointments.length},{id:'cancelled',label:'Cancelled',count:cancelledAppointments.length}].map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                    className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition mr-1 ${activeTab === tab.id ? 'border-teal-600 text-teal-700' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
-                    {tab.label}
-                    <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${activeTab === tab.id ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-500'}`}>{tab.count}</span>
-                  </button>
-                ))}
-                <div className="ml-auto py-2.5">
-                  <button onClick={() => setCurrentView('doctors')}
-                    className="flex items-center space-x-1.5 px-4 py-2 bg-teal-700 text-white rounded-lg text-xs font-semibold hover:bg-teal-800 transition">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                    <span>New Appointment</span>
-                  </button>
-                </div>
-              </div>
-              <div className="p-5">
-                {displayAppointments.length > 0 ? (
-                  <div className="space-y-2.5">
-                    {displayAppointments.map(apt => (
-                      <div key={apt.id} className="p-4 border border-gray-100 rounded-xl hover:border-gray-200 hover:shadow-sm transition-all">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start space-x-3.5 flex-1 min-w-0">
-                            <div className="w-11 h-11 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0">
-                              <span className="text-white font-bold text-sm">{apt.doctor?.name?.charAt(0)}</span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-sm font-bold text-gray-900">Dr. {apt.doctor?.name}</h4>
-                              <p className="text-xs text-gray-500">{apt.doctor?.specialization}</p>
-                              <div className="flex items-center space-x-2 mt-0.5">
-                                <span className="text-xs text-gray-400">{apt.time_slot?.date ? formatDate(apt.time_slot.date, {weekday:'short',month:'short',day:'numeric'}) : 'N/A'}</span>
-                                <span className="text-gray-200">·</span>
-                                <span className="text-xs text-gray-400">
-                                  {formatTime(apt.time_slot?.start_time)}{apt.time_slot?.end_time ? ` – ${formatTime(apt.time_slot.end_time)}` : ''}
+          <div className="p-7 space-y-5">
+            <div className="flex space-x-1 bg-gray-100 rounded-xl p-1 w-fit">
+              {[['upcoming', 'Upcoming'], ['past', 'Past'], ['cancelled', 'Cancelled']].map(([id, label]) => (
+                <button key={id} onClick={() => setActiveTab(id)}
+                  className={`px-4 py-2 rounded-lg text-xs font-semibold transition ${activeTab === id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100">
+              {displayAppointments.length > 0 ? (
+                <div className="divide-y divide-gray-50">
+                  {displayAppointments.map(apt => (
+                    <div key={apt.id} className="px-5 py-4 flex items-center justify-between">
+                      <div className="flex items-center space-x-3 flex-1 min-w-0">
+                        <div className="w-10 h-10 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0">
+                          <span className="text-white font-bold text-sm">{apt.doctor?.name?.charAt(0)}</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-sm font-bold text-gray-900">Dr. {apt.doctor?.name}</h4>
+                          <p className="text-xs text-gray-500">{apt.doctor?.specialization}</p>
+                          <div className="flex items-center space-x-2 mt-0.5">
+                            <span className="text-xs text-gray-400">{apt.time_slot?.date ? formatDate(apt.time_slot.date, { weekday: 'short', month: 'short', day: 'numeric' }) : 'N/A'}</span>
+                            <span className="text-gray-200">·</span>
+                            <span className="text-xs text-gray-400">{formatTime(apt.time_slot?.start_time)}</span>
+                          </div>
+                          {apt.token_number && apt.status === 'confirmed' && (
+                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                              <span className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                                Token #{apt.token_number}
+                              </span>
+                              {apt.report_time && (
+                                <span className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-2.5 py-1 rounded-full">
+                                  Report at {apt.report_time}
                                 </span>
-                              </div>
-                              {/* Token + Report time — only for confirmed */}
-                              {apt.token_number && apt.status === 'confirmed' && (
-                                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                  <span className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold px-2.5 py-1 rounded-full">
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
-                                    Token #{apt.token_number}
-                                  </span>
-                                  {apt.report_time && (
-                                    <span className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-2.5 py-1 rounded-full">
-                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                      Report at {apt.report_time}
-                                    </span>
-                                  )}
-                                </div>
                               )}
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            {pendingRequests.some(r => r.appointment_id === apt.id) && (
-                              <button
-                                onClick={() => { const req = pendingRequests.find(r => r.appointment_id === apt.id); setSelectedRequest(req); setShowUploadModal(true); }}
-                                className="px-2.5 py-1 bg-amber-500 text-white rounded-lg text-xs font-bold">Upload</button>
-                            )}
-                            <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize border ${statusCls(apt.status)}`}>{apt.status}</span>
-                          </div>
+                          )}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-12">
-                    <p className="text-sm font-semibold text-gray-900 mb-1">No appointments found</p>
-                    <p className="text-xs text-gray-400 mb-4">{activeTab === 'upcoming' ? 'Book your first appointment.' : 'Nothing to display.'}</p>
-                    {activeTab === 'upcoming' && (
-                      <button onClick={() => setCurrentView('doctors')} className="px-5 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 transition">Find a Doctor</button>
-                    )}
-                  </div>
-                )}
-              </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {pendingRequests.some(r => r.appointment_id === apt.id) && (
+                          <button
+                            onClick={() => { const req = pendingRequests.find(r => r.appointment_id === apt.id); setSelectedRequest(req); setShowUploadModal(true); }}
+                            className="px-2.5 py-1 bg-amber-500 text-white rounded-lg text-xs font-bold">Upload</button>
+                        )}
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize border ${statusCls(apt.status)}`}>{apt.status}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <p className="text-sm font-semibold text-gray-900 mb-1">No appointments found</p>
+                  <p className="text-xs text-gray-400 mb-4">{activeTab === 'upcoming' ? 'Book your first appointment.' : 'Nothing to display.'}</p>
+                  {activeTab === 'upcoming' && (
+                    <button onClick={() => setCurrentView('doctors')} className="px-5 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 transition">Find a Doctor</button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -851,6 +1482,7 @@ export default function PatientDashboard() {
         {/* ══════════ FIND DOCTORS ══════════ */}
         {currentView === 'doctors' && (
           <div className="p-7 space-y-5">
+            {/* Search + Filter bar */}
             <div className="bg-white rounded-xl border border-gray-100 p-5 space-y-4">
               <div className="relative">
                 <svg className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -860,6 +1492,8 @@ export default function PatientDashboard() {
                   placeholder="Search by name or specialty..."
                   className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
               </div>
+
+              {/* Specialty chips */}
               <div className="flex flex-wrap gap-2">
                 {specialties.map(spec => (
                   <button key={spec.id} onClick={() => setSelectedSpecialty(spec.id)}
@@ -868,55 +1502,133 @@ export default function PatientDashboard() {
                   </button>
                 ))}
               </div>
+
+              {/* ── NEARBY FILTER ── */}
+              <div className="border-t border-gray-100 pt-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  {!nearbyMode ? (
+                    <button onClick={getPatientLocation} disabled={nearbyLoading}
+                      className="flex items-center gap-2 px-4 py-2 bg-white text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-100 transition disabled:opacity-60">
+                      {nearbyLoading
+                        ? <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
+                        : <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+                      {nearbyLoading ? 'Detecting location…' : 'Find Nearby Doctors'}
+                    </button>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-2 rounded-lg">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        Nearby filter ON
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-gray-600 font-medium">Radius:</label>
+                        {[5, 10, 15, 25].map(r => (
+                          <button key={r} onClick={() => setNearbyRadius(r)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${nearbyRadius === r ? 'bg-teal-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                            {r} km
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={clearNearbyFilter}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                  {nearbyError && <p className="text-xs text-red-500">{nearbyError}</p>}
+                </div>
+                {nearbyMode && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    Showing {filteredDoctors.length} doctor{filteredDoctors.length !== 1 ? 's' : ''} within {nearbyRadius} km of your location
+                  </p>
+                )}
+              </div>
             </div>
+
+            {/* Doctor grid */}
             {filteredDoctors.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredDoctors.map(doctor => (
-                  <div key={doctor.id} className="bg-white rounded-xl border border-gray-100 hover:shadow-md transition-all overflow-hidden">
+                  <div key={doctor.id} className="bg-white rounded-xl border border-gray-100 hover:shadow-md transition-all overflow-hidden flex flex-col">
                     <div className="h-1 bg-teal-700"></div>
-                    <div className="p-5">
+                    <div className="p-5 flex-1 flex flex-col">
                       <div className="flex items-start space-x-3.5 mb-4">
-                        <div className="w-12 h-12 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0">
-                          <span className="text-white font-bold text-xl">{doctor.name?.charAt(0)}</span>
-                        </div>
-                        <div>
+                        {doctor.avatar_url
+                          ? <img src={doctor.avatar_url} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                          : <div className="w-12 h-12 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-xl">{doctor.name?.charAt(0)}</span></div>}
+                        <div className="min-w-0 flex-1">
                           <h4 className="font-bold text-gray-900 text-sm">Dr. {doctor.name}</h4>
                           <p className="text-xs text-teal-600 font-medium mt-0.5">{doctor.specialization}</p>
-                          <div className="flex items-center mt-1.5">
-                            {[...Array(5)].map((_,i) => (
-                              <svg key={i} className="w-3 h-3 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
-                              </svg>
-                            ))}
-                            <span className="text-xs text-gray-400 ml-1">4.5</span>
-                          </div>
+                          {doctor._distance != null && (
+                            <span className="inline-flex items-center gap-1 mt-1 bg-blue-50 text-blue-700 text-[10px] font-semibold px-2 py-0.5 rounded-full">
+                              {doctor._distance.toFixed(1)} km
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <div className="space-y-1 mb-4">
-                        <p className="text-xs text-gray-500 flex items-center">
-                          <svg className="w-3.5 h-3.5 mr-1.5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                          15+ years experience
-                        </p>
-                        <p className="text-xs text-gray-500 flex items-center">
-                          <svg className="w-3.5 h-3.5 mr-1.5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                          Consultation: $50.99
-                        </p>
+                      <div className="space-y-1 mb-4 flex-1">
+                        {doctor.experience_years && (
+                          <p className="text-xs text-gray-500 flex items-center">
+                            <svg className="w-3.5 h-3.5 mr-1.5 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                            {doctor.experience_years}+ years experience
+                          </p>
+                        )}
+                        {doctor.consultation_fee && (
+                          <p className="text-xs text-gray-500 flex items-center">
+                            <svg className="w-3.5 h-3.5 mr-1.5 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            Consultation: ₹{doctor.consultation_fee}
+                          </p>
+                        )}
+                        {doctor.clinic_place_name && (
+                          <p className="text-xs text-gray-500 flex items-center">
+                            <svg className="w-3.5 h-3.5 mr-1.5 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
+                            <span className="truncate">{doctor.clinic_place_name}</span>
+                          </p>
+                        )}
                       </div>
-                      <button onClick={() => { setSelectedDoctor(doctor); setShowBookingModal(true); }}
-                        className="w-full bg-teal-700 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-teal-800 transition">
-                        Book Appointment
-                      </button>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button onClick={() => setViewingDoctor(doctor)}
+                          className="py-2 border border-teal-700 text-teal-700 rounded-xl text-xs font-semibold hover:bg-teal-50 transition">
+                          Details
+                        </button>
+                        <button onClick={() => setChatDoctor(doctor)}
+                          className="py-2 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-50 transition flex items-center justify-center gap-1"
+                          title="Chat available after appointment confirmation">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                          Chat
+                        </button>
+                        <button onClick={() => { setSelectedDoctor(doctor); setShowBookingModal(true); }}
+                          className="py-2 bg-teal-700 text-white rounded-xl text-xs font-semibold hover:bg-teal-800 transition">
+                          Book
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
+                <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                </div>
                 <p className="text-sm font-semibold text-gray-900 mb-1">No doctors found</p>
-                <p className="text-xs text-gray-400">Adjust your search or specialty filter</p>
+                <p className="text-xs text-gray-400">
+                  {nearbyMode ? `No doctors within ${nearbyRadius} km. Try increasing the radius.` : 'Adjust your search or specialty filter'}
+                </p>
               </div>
             )}
           </div>
+        )}
+
+        {/* ══════════ MY DOCTORS ══════════ */}
+        {currentView === 'mydoctors' && (
+          <MyDoctorsView patientData={patientData} onChat={(doc) => setChatDoctor(doc)} onDetails={(doc) => setViewingDoctor(doc)} />
+        )}
+
+        {/* ══════════ MESSAGES ══════════ */}
+        {currentView === 'messages' && (
+          <MessagesView patientData={patientData} doctors={doctors} onOpenChat={(doc) => setChatDoctor(doc)} />
         )}
 
         {/* ══════════ MEDICAL RECORDS ══════════ */}
@@ -924,44 +1636,59 @@ export default function PatientDashboard() {
           <div className="p-7">
             <p className="text-xs text-gray-400 mb-5">{medicalRecords.length} record{medicalRecords.length !== 1 ? 's' : ''}</p>
             {medicalRecords.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {medicalRecords.map(record => (
-                  <div key={record.id} className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-sm transition-all">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-9 h-9 bg-teal-50 rounded-lg flex items-center justify-center border border-teal-100">
-                          <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-gray-900">{record.title}</h4>
-                          <p className="text-xs text-gray-400">{formatDate(record.created_at)} · Dr. {record.doctor?.name}</p>
-                        </div>
-                      </div>
-                      <span className="text-xs px-2 py-1 bg-gray-50 text-gray-500 rounded-lg capitalize border border-gray-100">
-                        {record.record_type?.replace('_', ' ')}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-3 line-clamp-2">{record.description}</p>
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-50">
-                      <span className="text-xs text-gray-400">Visit: {formatDate(record.appointment?.time_slot?.date)}</span>
-                      {record.document_url && (
-                        <a href={record.document_url} target="_blank" rel="noreferrer" className="flex items-center text-xs text-teal-600 hover:text-teal-700 font-semibold">
-                          <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                          </svg>
-                          View
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))}
+              <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      {['#', 'Title', 'Doctor', 'Date', 'Type', 'Details', 'Doc'].map(h => (
+                        <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {medicalRecords.map((record, idx) => (
+                      <tr key={record.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 text-gray-300 font-medium">{idx + 1}</td>
+                        <td className="px-4 py-3"><span className="font-semibold text-gray-900">{record.title || '—'}</span></td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            {record.doctor?.avatar_url
+                              ? <img src={record.doctor.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 ring-1 ring-teal-100 shadow-sm" />
+                              : <div className="w-7 h-7 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
+                                  <span className="text-white font-bold text-[10px]">{record.doctor?.name?.charAt(0)}</span>
+                                </div>}
+                            <span className="text-gray-700 font-medium">Dr. {record.doctor?.name || '—'}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(record.created_at)}</td>
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-100 rounded-md capitalize text-[11px] font-medium">
+                            {record.record_type?.replace('_', ' ') || '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 max-w-[200px]">
+                          <span className="line-clamp-1">{record.description || '—'}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {record.document_url ? (
+                            <a href={record.document_url} target="_blank" rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-teal-600 hover:text-teal-700 font-semibold transition">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                              View
+                            </a>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
-                <p className="text-sm font-semibold text-gray-900 mb-1">No medical records</p>
-                <p className="text-xs text-gray-400">Records will appear here after consultations.</p>
+                <p className="text-sm font-semibold text-gray-900 mb-1">No records yet</p>
+                <p className="text-xs text-gray-400">Your medical records will appear here</p>
               </div>
             )}
           </div>
@@ -973,13 +1700,13 @@ export default function PatientDashboard() {
             {/* Breadcrumb */}
             <div className="flex items-center space-x-1.5 text-xs text-gray-400 mb-5">
               <button onClick={() => setCurrentView('dashboard')} className="hover:text-gray-600 transition">Dashboard</button>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
               <span className="text-gray-700 font-medium">My Profile</span>
             </div>
 
             <div className="w-full space-y-5">
 
-              {/* ── TOP CARD: Avatar + Info + Edit Profile (matches reference image) ── */}
+              {/* ── TOP CARD: Avatar + Info + Edit Profile ── */}
               <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
                 <div className="p-6 flex items-start space-x-6 border-b border-gray-50">
                   {/* Avatar with camera button */}
@@ -999,10 +1726,10 @@ export default function PatientDashboard() {
                       title="Update profile photo"
                       className="absolute bottom-0.5 right-0.5 w-7 h-7 bg-teal-700 hover:bg-teal-800 rounded-full border-2 border-white flex items-center justify-center transition disabled:opacity-60">
                       {avatarUploading ? (
-                        <svg className="w-3 h-3 text-white animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        <svg className="w-3 h-3 text-white animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                       ) : (
                         <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                         </svg>
                       )}
                     </button>
@@ -1012,8 +1739,6 @@ export default function PatientDashboard() {
                   <div className="flex-1 min-w-0">
                     <h2 className="text-xl font-bold text-gray-900">{patientData?.name}</h2>
                     <p className="text-sm text-gray-400 mt-0.5">{patientData?.email}</p>
-
-                    {/* Key details inline — like reference image */}
                     <div className="mt-4 grid grid-cols-3 gap-x-8 gap-y-3">
                       {[
                         { label: 'Sex', value: patientData?.gender ? (patientData.gender.charAt(0).toUpperCase() + patientData.gender.slice(1)) : '—' },
@@ -1036,7 +1761,7 @@ export default function PatientDashboard() {
                     {!isEditingProfile ? (
                       <button onClick={() => setIsEditingProfile(true)}
                         className="flex items-center space-x-1.5 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-50 transition">
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                         <span>Edit Profile</span>
                       </button>
                     ) : (
@@ -1086,7 +1811,7 @@ export default function PatientDashboard() {
                         <select value={profileForm.blood_group || ''} onChange={e => setProfileForm({ ...profileForm, blood_group: e.target.value })}
                           className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gray-50 text-gray-900">
                           <option value="">Select</option>
-                          {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => <option key={g} value={g}>{g}</option>)}
+                          {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(g => <option key={g} value={g}>{g}</option>)}
                         </select>
                       </div>
                       <div className="md:col-span-1">
@@ -1099,7 +1824,7 @@ export default function PatientDashboard() {
                 )}
               </div>
 
-              {/* ── HEALTH DETAILS CARD (separate table) ── */}
+              {/* ── HEALTH DETAILS CARD ── */}
               <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
                 <div className="px-6 py-4 flex items-center justify-between border-b border-gray-50">
                   <div>
@@ -1109,7 +1834,7 @@ export default function PatientDashboard() {
                   {!isEditingHealth ? (
                     <button onClick={() => setIsEditingHealth(true)}
                       className="flex items-center space-x-1.5 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-50 transition">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                       <span>{healthDetails ? 'Edit' : 'Add Details'}</span>
                     </button>
                   ) : (
@@ -1166,7 +1891,7 @@ export default function PatientDashboard() {
                     )}
                   </div>
 
-                  {/* Medical Conditions */}
+                  {/* Medical Information */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Medical Information</h4>
                     {isEditingHealth ? (
@@ -1278,103 +2003,120 @@ export default function PatientDashboard() {
         )}
       </main>
 
+      {/* ══════════ DOCTOR DETAIL MODAL ══════════ */}
+      {viewingDoctor && (
+        <DoctorDetailModal
+          doctor={viewingDoctor}
+          onClose={() => setViewingDoctor(null)}
+          onBook={(doc) => { setSelectedDoctor(doc); setShowBookingModal(true); }}
+          onChat={(doc) => { setViewingDoctor(null); setChatDoctor(doc); }}
+        />
+      )}
+
+      {/* ══════════ CHAT PANEL ══════════ */}
+      {chatDoctor && patientData && (
+        <ChatPanel
+          patientData={patientData}
+          chatDoctor={chatDoctor}
+          onClose={() => { setChatDoctor(null); fetchUnreadMsgCount(); }}
+        />
+      )}
+
       {/* ══════════ BOOKING MODAL ══════════ */}
       {showBookingModal && selectedDoctor && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-2xl">
-            <div className="sticky top-0 bg-white border-b border-gray-100 px-5 py-3.5 flex items-center justify-between z-10 rounded-t-2xl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-teal-700 to-teal-600 p-5 flex items-center justify-between sticky top-0 z-10">
               <div className="flex items-center space-x-3">
-                <div className="w-9 h-9 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <span className="text-white font-bold text-sm">{selectedDoctor.name?.charAt(0)}</span>
-                </div>
+                {selectedDoctor.avatar_url
+                  ? <img src={selectedDoctor.avatar_url} alt="" className="w-10 h-10 rounded-xl object-cover ring-2 ring-white/30" />
+                  : <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center"><span className="text-white font-bold">{selectedDoctor.name?.charAt(0)}</span></div>}
                 <div>
-                  <h2 className="text-sm font-bold text-gray-900">Book Appointment — Dr. {selectedDoctor.name}</h2>
-                  <p className="text-xs text-teal-600">{selectedDoctor.specialization} · $50.99 per session</p>
+                  <h3 className="text-base font-bold text-white">Dr. {selectedDoctor.name}</h3>
+                  <p className="text-teal-200 text-xs">{selectedDoctor.specialization}</p>
                 </div>
               </div>
               <button onClick={() => { setShowBookingModal(false); setSelectedDoctor(null); setSelectedDate(null); setSelectedSlot(null); }}
-                className="w-7 h-7 hover:bg-gray-100 rounded-lg flex items-center justify-center transition">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            <div className="p-5 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Select Date</p>
-                  <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
-                    <div className="flex items-center justify-between mb-2.5">
-                      <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))} className="w-6 h-6 hover:bg-white rounded-lg flex items-center justify-center">
-                        <svg className="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
-                      </button>
-                      <span className="text-xs font-bold text-gray-900">{currentMonth.toLocaleDateString('en-US', {month:'long',year:'numeric'})}</span>
-                      <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))} className="w-6 h-6 hover:bg-white rounded-lg flex items-center justify-center">
-                        <svg className="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-7 gap-0.5 mb-1">
-                      {['S','M','T','W','T','F','S'].map((d,i) => <div key={i} className="text-center text-xs font-semibold text-gray-400 py-0.5">{d}</div>)}
-                    </div>
-                    <div className="grid grid-cols-7 gap-0.5">
-                      {getDatesInMonth().map((date, i) => {
-                        const avail = isDateAvailable(date);
-                        const sel = date && selectedDate === date.toISOString().split('T')[0];
-                        const today = date && date.toDateString() === new Date().toDateString();
-                        return (
-                          <button key={i} onClick={() => date && avail && setSelectedDate(date.toISOString().split('T')[0])} disabled={!date || !avail}
-                            className={`aspect-square rounded-lg flex items-center justify-center text-xs font-medium transition ${!date?'invisible':''} ${sel?'bg-teal-700 text-white':''} ${!sel&&avail?'bg-white text-teal-700 hover:bg-teal-50 border border-teal-100':''} ${!sel&&!avail&&date?'text-gray-300 cursor-not-allowed':''} ${today&&!sel?'ring-2 ring-teal-400':''}`}>
-                            {date&&date.getDate()}
-                          </button>
-                        );
-                      })}
-                    </div>
+            <div className="p-6 space-y-5">
+              {/* Calendar */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-bold text-gray-900">
+                    {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                  </h4>
+                  <div className="flex gap-1">
+                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                      className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition">
+                      <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                      className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition">
+                      <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    </button>
                   </div>
                 </div>
+                <div className="grid grid-cols-7 gap-1 mb-2">
+                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
+                    <div key={d} className="text-center text-[11px] font-semibold text-gray-400 py-1">{d}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                  {getDatesInMonth().map((date, i) => {
+                    const available = isDateAvailable(date);
+                    const selected = date && selectedDate === date.toISOString().split('T')[0];
+                    const past = date && date < new Date().setHours(0, 0, 0, 0);
+                    return (
+                      <button key={i} disabled={!available || past}
+                        onClick={() => { if (date && available && !past) { setSelectedDate(date.toISOString().split('T')[0]); setSelectedSlot(null); } }}
+                        className={`h-9 text-xs font-medium rounded-lg transition-all ${!date ? 'invisible' : selected ? 'bg-teal-700 text-white' : available && !past ? 'hover:bg-teal-50 text-teal-700 font-bold' : 'text-gray-300 cursor-not-allowed'}`}>
+                        {date?.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Time slots */}
+              {selectedDate && (
                 <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Select Time</p>
-                  {selectedDate ? (
-                    <>
-                      <div className="flex space-x-1.5 mb-2.5">
-                        {[{id:'morning',label:'Morning'},{id:'afternoon',label:'Afternoon'},{id:'evening',label:'Evening'}].map(p => (
-                          <button key={p.id} onClick={() => setSelectedTimeOfDay(p.id)}
-                            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition ${selectedTimeOfDay===p.id?'bg-teal-700 text-white':'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-100'}`}>
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                      {timeSlots.length > 0 ? (
-                        <div className="grid grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
-                          {timeSlots.map(slot => (
-                            <button key={slot.id} onClick={() => setSelectedSlot(slot)}
-                              className={`py-2 rounded-lg text-xs font-semibold transition ${selectedSlot?.id===slot.id?'bg-teal-700 text-white':'bg-gray-50 text-gray-700 hover:bg-teal-50 hover:text-teal-700 border border-gray-100'}`}>
-                              {formatTime(slot.start_time)}
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-center py-5 bg-gray-50 rounded-xl border border-gray-100">
-                          <p className="text-xs text-gray-400">No slots for {selectedTimeOfDay}</p>
-                        </div>
-                      )}
-                    </>
+                  <div className="flex gap-2 mb-3">
+                    {[{ id: 'morning', label: 'Morning', icon: '' }, { id: 'afternoon', label: 'Afternoon', icon: '' }, { id: 'evening', label: 'Evening', icon: '' }].map(p => (
+                      <button key={p.id} onClick={() => { setSelectedTimeOfDay(p.id); setSelectedSlot(null); }}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition ${selectedTimeOfDay === p.id ? 'bg-teal-700 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-100'}`}>
+                        {p.icon} {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  {timeSlots.length > 0 ? (
+                    <div className="grid grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
+                      {timeSlots.map(slot => (
+                        <button key={slot.id} onClick={() => setSelectedSlot(slot)}
+                          className={`py-2 rounded-lg text-xs font-semibold transition ${selectedSlot?.id === slot.id ? 'bg-teal-700 text-white' : 'bg-gray-50 text-gray-700 hover:bg-teal-50 hover:text-teal-700 border border-gray-100'}`}>
+                          {formatTime(slot.start_time)}
+                        </button>
+                      ))}
+                    </div>
                   ) : (
-                    <div className="text-center py-10 bg-gray-50 rounded-xl border border-gray-100">
-                      <p className="text-xs text-gray-400">Select a date first</p>
+                    <div className="text-center py-5 bg-gray-50 rounded-xl">
+                      <p className="text-xs text-gray-400">No slots available for this time period</p>
                     </div>
                   )}
                 </div>
-              </div>
+              )}
+              {/* Symptoms & Notes */}
               {selectedSlot && (
-                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Symptoms <span className="text-gray-300 normal-case font-normal">(optional)</span></label>
-                    <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} placeholder="Describe your symptoms..." rows={3}
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5 block">Symptoms <span className="text-gray-300 normal-case font-normal">(optional)</span></label>
+                    <textarea value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="Describe your symptoms..." rows={3}
                       className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gray-50 resize-none text-gray-900" />
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Notes <span className="text-gray-300 normal-case font-normal">(optional)</span></label>
-                    <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any additional information..." rows={3}
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5 block">Notes <span className="text-gray-300 normal-case font-normal">(optional)</span></label>
+                    <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any additional information..." rows={3}
                       className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gray-50 resize-none text-gray-900" />
                   </div>
                 </div>
@@ -1386,7 +2128,7 @@ export default function PatientDashboard() {
                   </svg>
                   <p className="text-xs text-teal-800">
                     <span className="font-bold">Dr. {selectedDoctor.name}</span>
-                    {' · '}{formatDate(selectedDate, {weekday:'long',month:'long',day:'numeric'})}
+                    {' · '}{formatDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}
                     {' · '}{formatTime(selectedSlot.start_time)}
                   </p>
                 </div>
@@ -1397,7 +2139,7 @@ export default function PatientDashboard() {
                   Cancel
                 </button>
                 <button onClick={handleBookAppointment} disabled={!selectedSlot || loading}
-                  className={`flex-1 px-5 py-2.5 rounded-xl text-sm font-bold transition ${selectedSlot&&!loading?'bg-teal-700 text-white hover:bg-teal-800':'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
+                  className={`flex-1 px-5 py-2.5 rounded-xl text-sm font-bold transition ${selectedSlot && !loading ? 'bg-teal-700 text-white hover:bg-teal-800' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
                   {loading ? 'Booking...' : 'Confirm Appointment'}
                 </button>
               </div>
@@ -1427,34 +2169,30 @@ export default function PatientDashboard() {
               </div>
             )}
             <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center hover:border-teal-400 hover:bg-teal-50 transition-all cursor-pointer relative mb-4">
-              <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={e=>setFileToUpload(e.target.files[0])} />
+              <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={e => setFileToUpload(e.target.files[0])} />
               {fileToUpload ? (
-                <>
+                <div className="flex flex-col items-center">
                   <div className="w-9 h-9 bg-teal-100 rounded-xl flex items-center justify-center mx-auto mb-2">
-                    <svg style={{width:'18px',height:'18px'}} className="text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
+                    <svg className="w-4.5 h-4.5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                   </div>
                   <p className="text-xs font-semibold text-gray-900 truncate">{fileToUpload.name}</p>
-                  <p className="text-xs text-gray-400">{(fileToUpload.size/1024).toFixed(1)} KB</p>
-                </>
+                  <p className="text-xs text-gray-400">{(fileToUpload.size / 1024).toFixed(1)} KB</p>
+                </div>
               ) : (
-                <>
+                <div className="flex flex-col items-center">
                   <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-2">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
                   </div>
                   <p className="text-xs font-semibold text-gray-700">Click to select file</p>
                   <p className="text-xs text-gray-400 mt-0.5">PDF, JPG, PNG — max 5 MB</p>
-                </>
+                </div>
               )}
             </div>
             <div className="flex space-x-2.5">
               <button onClick={() => { setShowUploadModal(false); setFileToUpload(null); }}
                 className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-50 transition">Cancel</button>
               <button onClick={handleFileUpload} disabled={!fileToUpload || uploading}
-                className={`flex-1 px-4 py-2.5 bg-teal-700 text-white rounded-xl text-xs font-bold transition ${(!fileToUpload||uploading)?'opacity-50 cursor-not-allowed':'hover:bg-teal-800'}`}>
+                className={`flex-1 px-4 py-2.5 bg-teal-700 text-white rounded-xl text-xs font-bold transition ${(!fileToUpload || uploading) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-teal-800'}`}>
                 {uploading ? 'Uploading...' : 'Confirm Upload'}
               </button>
             </div>
