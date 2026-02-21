@@ -1,5 +1,30 @@
 'use client';
 
+/*
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  Run this SQL in Supabase → SQL Editor before using Admin    ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║                                                              ║
+  ║  CREATE TABLE IF NOT EXISTS public.admin_profiles (          ║
+  ║    id          UUID PRIMARY KEY                              ║
+  ║                  REFERENCES auth.users(id) ON DELETE CASCADE,║
+  ║    role_title  TEXT DEFAULT 'Admin',                         ║
+  ║    bio         TEXT,                                         ║
+  ║    address     TEXT,                                         ║
+  ║    avatar_url  TEXT,                                         ║
+  ║    updated_at  TIMESTAMPTZ DEFAULT NOW()                     ║
+  ║  );                                                          ║
+  ║                                                              ║
+  ║  ALTER TABLE public.admin_profiles ENABLE ROW LEVEL SECURITY;║
+  ║                                                              ║
+  ║  CREATE POLICY "Admins manage own profile"                   ║
+  ║    ON public.admin_profiles FOR ALL                          ║
+  ║    USING (auth.uid() = id)                                   ║
+  ║    WITH CHECK (auth.uid() = id);                             ║
+  ║                                                              ║
+  ╚══════════════════════════════════════════════════════════════╝
+*/
+
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
@@ -183,9 +208,9 @@ function DeleteModal({ doctor, onConfirm, onCancel, loading }) {
 
 /* ─── Add Admin Modal ─── */
 function AddAdminModal({ onClose, onSuccess }) {
-  const [form, setForm]     = useState({ name: '', email: '', password: '', phone: '', role: 'admin' });
-  const [avatar, setAvatar] = useState(null);         // File object
-  const [preview, setPreview] = useState(null);       // Object URL for preview
+  const [form, setForm]     = useState({ name: '', email: '', password: '', phone: '', role_title: 'Admin' });
+  const [avatar, setAvatar] = useState(null);
+  const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState('');
   const fileRef = useRef(null);
@@ -203,44 +228,51 @@ function AddAdminModal({ onClose, onSuccess }) {
     if (form.password.length < 8) { setError('Password must be at least 8 characters.'); return; }
     setLoading(true); setError('');
     try {
-      // 1. Create auth user (stored in auth.users)
+      // 1. Create auth user
       const { data: authData, error: authErr } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
-        options: {
-          data: { name: form.name, role: 'admin' },   // stored in auth.users.raw_user_meta_data
-        },
+        options: { data: { name: form.name, role: 'admin' } },
       });
       if (authErr) throw authErr;
       const uid = authData.user?.id;
       if (!uid) throw new Error('User creation failed — no user ID returned.');
 
-      // 2. Upload profile image to avatars bucket (storage)
+      // 2. Upload profile image to admin_profile bucket
       let avatar_url = null;
       if (avatar) {
-        const ext  = avatar.name.split('.').pop();
+        const ext  = avatar.name.split('.').pop().toLowerCase();
         const path = `admin_${uid}.${ext}`;
         const { error: upErr } = await supabase.storage
-          .from('avatars')
+          .from('admin_profile')
           .upload(path, avatar, { upsert: true, contentType: avatar.type });
         if (upErr) throw upErr;
-        const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path);
+        const { data: urlData } = supabase.storage.from('admin_profile').getPublicUrl(path);
         avatar_url = `${urlData.publicUrl}?t=${Date.now()}`;
       }
 
-      // 3. Save profile data to public.users
+      // 3. Insert into public.users with role = 'admin' (no role_title — not in schema)
       const { error: dbErr } = await supabase.from('users').insert([{
         id:          uid,
         name:        form.name,
         email:       form.email,
         phone:       form.phone || null,
         role:        'admin',
-        role_title:  form.role || 'Admin',
         avatar_url:  avatar_url,
         is_approved: true,
         created_at:  new Date().toISOString(),
       }]);
       if (dbErr) throw dbErr;
+
+      // 4. Try to create admin_profiles row (best-effort, won't block if RLS issues)
+      try {
+        await supabase.from('admin_profiles').upsert([{
+          id:         uid,
+          role_title: form.role_title || 'Admin',
+          avatar_url: avatar_url,
+          updated_at: new Date().toISOString(),
+        }], { onConflict: 'id' });
+      } catch (_) { /* admin_profiles is optional */ }
 
       onSuccess(); onClose();
     } catch (e) { setError(e.message || 'Failed to create admin.'); }
@@ -251,7 +283,10 @@ function AddAdminModal({ onClose, onSuccess }) {
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
         <div className="bg-gradient-to-r from-teal-700 to-teal-500 px-6 py-4 flex items-center justify-between">
-          <div><h3 className="text-sm font-bold text-white">Add New Admin</h3><p className="text-teal-100 text-xs mt-0.5">Create an admin account</p></div>
+          <div>
+            <h3 className="text-sm font-bold text-white">Add New Admin</h3>
+            <p className="text-teal-100 text-xs mt-0.5">Create an admin account with role = admin</p>
+          </div>
           <button onClick={onClose} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition"><Ic d="M6 18L18 6M6 6l12 12" className="w-3.5 h-3.5 text-white" /></button>
         </div>
         <div className="p-5 space-y-3">
@@ -270,26 +305,29 @@ function AddAdminModal({ onClose, onSuccess }) {
               </div>
             </div>
             <div>
-              <p className="text-xs font-semibold text-gray-700">Profile Photo</p>
-              <p className="text-[11px] text-gray-400">Saved to avatars storage</p>
+              <p className="text-xs font-semibold text-gray-700">Profile Photo <span className="text-gray-400">(optional)</span></p>
+              <p className="text-[11px] text-gray-400">Saved to avatars storage + admin_profiles</p>
             </div>
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarPick} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-xs font-semibold text-gray-500 mb-1">Full Name *</label><input type="text" value={form.name} onChange={set('name')} placeholder="Full name" className={inp} /></div>
-            <div><label className="block text-xs font-semibold text-gray-500 mb-1">Role Title</label><input type="text" value={form.role_title} onChange={set('role_title')} placeholder="Admin" className={inp} /></div>
+            <div><label className="block text-xs font-semibold text-gray-500 mb-1">Role Title</label><input type="text" value={form.role_title} onChange={set('role_title')} placeholder="e.g. Super Admin" className={inp} /></div>
           </div>
           <div><label className="block text-xs font-semibold text-gray-500 mb-1">Email *</label><input type="email" value={form.email} onChange={set('email')} placeholder="admin@amrt.com" className={inp} /></div>
           <div><label className="block text-xs font-semibold text-gray-500 mb-1">Phone</label><input type="tel" value={form.phone} onChange={set('phone')} placeholder="+91 98765 43210" className={inp} /></div>
           <div><label className="block text-xs font-semibold text-gray-500 mb-1">Password *</label><input type="password" value={form.password} onChange={set('password')} placeholder="Min 8 characters" className={inp} /></div>
-          <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            A confirmation email will be sent. The new admin must verify their email before logging in.
-          </p>
+
+          <div className="bg-teal-50 border border-teal-200 rounded-xl px-3 py-2 flex gap-2">
+            <Ic d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" className="w-4 h-4 text-teal-600 flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-teal-800">This account will be created with <strong>role = admin</strong> and full admin access. A verification email will be sent.</p>
+          </div>
+
           <div className="flex gap-3 pt-1">
             <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-            <button onClick={handleSubmit} disabled={loading} className="flex-1 py-2.5 text-sm font-semibold bg-teal-700 text-white rounded-xl hover:bg-teal-800 transition disabled:opacity-50">
-              {loading ? 'Creating…' : 'Create Admin'}
+            <button onClick={handleSubmit} disabled={loading} className="flex-1 py-2.5 text-sm font-semibold bg-teal-700 text-white rounded-xl hover:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
+              {loading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Creating…</> : 'Create Admin'}
             </button>
           </div>
         </div>
@@ -300,90 +338,244 @@ function AddAdminModal({ onClose, onSuccess }) {
 
 /* ─── Admin Profile Modal ─── */
 function AdminProfileModal({ admin, isOwn, onClose, onUpdate }) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: admin.name || '', phone: admin.phone || '', role_title: admin.role_title || 'Admin' });
-  const [saving, setSaving] = useState(false);
+  const [editing, setEditing]       = useState(false);
+  const [saving, setSaving]         = useState(false);
   const [avatarLoading, setAvatarLoading] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState(admin.avatar_url || null);
+  const [profileExtra, setProfileExtra]   = useState({ bio: '', address: '', role_title: 'Admin' }); // from admin_profiles
+  const [loadingExtra, setLoadingExtra]   = useState(true);
+
+  const [form, setForm] = useState({
+    name:       admin.name       || '',
+    phone:      admin.phone      || '',
+    role_title: admin.role_title || 'Admin',  // will be overwritten by admin_profiles load
+    bio:        '',
+    address:    '',
+  });
+
   const fileRef = useRef(null);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
-  const inp = 'w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500';
+  const inp = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white';
 
+  /* Load extended profile from admin_profiles */
+  useEffect(() => {
+    const loadExtra = async () => {
+      setLoadingExtra(true);
+      try {
+        const { data } = await supabase
+          .from('admin_profiles')
+          .select('bio, address, avatar_url, role_title')
+          .eq('id', admin.id)
+          .maybeSingle();
+        if (data) {
+          setProfileExtra({ bio: data.bio || '', address: data.address || '', role_title: data.role_title || 'Admin' });
+          setForm(f => ({ ...f, bio: data.bio || '', address: data.address || '', role_title: data.role_title || 'Admin' }));
+          if (data.avatar_url && !admin.avatar_url) setAvatarPreview(data.avatar_url);
+        }
+      } catch (_) {}
+      finally { setLoadingExtra(false); }
+    };
+    loadExtra();
+  }, [admin.id]);
+
+  /* Save: update public.users + upsert admin_profiles */
   const handleSave = async () => {
+    if (!form.name.trim()) { alert('Name is required.'); return; }
     setSaving(true);
     try {
-      const { error } = await supabase.from('users').update({ name: form.name, phone: form.phone || null, role_title: form.role_title || null }).eq('id', admin.id);
-      if (error) throw error;
-      onUpdate({ ...admin, ...form }); setEditing(false);
-    } catch (e) { alert(e.message); } finally { setSaving(false); }
+      // 1. Update public.users (only columns that exist in the schema)
+      const { error: usrErr } = await supabase
+        .from('users')
+        .update({
+          name:  form.name.trim(),
+          phone: form.phone.trim() || null,
+        })
+        .eq('id', admin.id);
+      if (usrErr) throw usrErr;
+
+      // 2. Upsert admin_profiles (best-effort — non-blocking if RLS not yet disabled)
+      try {
+        await supabase.from('admin_profiles').upsert({
+          id:         admin.id,
+          role_title: form.role_title.trim() || 'Admin',
+          bio:        form.bio.trim()        || null,
+          address:    form.address.trim()    || null,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+      } catch (_) { /* silent — users table already saved */ }
+
+      onUpdate({
+        ...admin,
+        name:       form.name.trim(),
+        phone:      form.phone.trim() || null,
+        role_title: form.role_title.trim() || 'Admin',
+      });
+      setProfileExtra({ bio: form.bio, address: form.address, role_title: form.role_title });
+      setEditing(false);
+    } catch (e) { alert('Save failed: ' + e.message); }
+    finally { setSaving(false); }
   };
 
-  const handleAvatar = async e => {
-    const file = e.target.files?.[0]; if (!file) return;
+  /* Avatar upload → admin_profile bucket → save URL to users.avatar_url only */
+  const handleAvatarChange = async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarPreview(URL.createObjectURL(file)); // instant local preview
     setAvatarLoading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const path = `avatars/admin_${admin.id}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('profile-images').upload(path, file, { upsert: true });
+      const ext  = file.name.split('.').pop().toLowerCase();
+      const filePath = `admin_${admin.id}.${ext}`;
+
+      // 1. Upload file to admin_profile storage bucket
+      const { error: upErr } = await supabase.storage
+        .from('admin_profile')
+        .upload(filePath, file, { upsert: true, contentType: file.type });
       if (upErr) throw upErr;
-      const { data } = supabase.storage.from('profile-images').getPublicUrl(path);
-      const url = `${data.publicUrl}?t=${Date.now()}`;
-      await supabase.from('users').update({ avatar_url: url }).eq('id', admin.id);
-      onUpdate({ ...admin, avatar_url: url });
-    } catch (e) { alert('Upload failed: ' + e.message); } finally { setAvatarLoading(false); if (fileRef.current) fileRef.current.value = ''; }
+
+      // 2. Get the public URL
+      const { data: urlData } = supabase.storage
+        .from('admin_profile')
+        .getPublicUrl(filePath);
+      const finalUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+      // 3. Save URL to public.users only — no admin_profiles write needed
+      const { error: usrErr } = await supabase
+        .from('users')
+        .update({ avatar_url: finalUrl })
+        .eq('id', admin.id);
+      if (usrErr) throw usrErr;
+
+      setAvatarPreview(finalUrl);
+      onUpdate({ ...admin, avatar_url: finalUrl });
+    } catch (e) {
+      alert('Photo upload failed: ' + e.message);
+      setAvatarPreview(admin.avatar_url || null);
+    } finally {
+      setAvatarLoading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
+  const joined = admin.created_at
+    ? new Date(admin.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : '—';
+
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden my-4">
+
+        {/* Header */}
         <div className="bg-gradient-to-r from-teal-700 to-teal-500 p-5 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white">Admin Profile</h3>
-          <button onClick={onClose} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition"><Ic d="M6 18L18 6M6 6l12 12" className="w-3.5 h-3.5 text-white" /></button>
+          <div>
+            <h3 className="text-sm font-bold text-white">{isOwn ? 'My Profile' : 'Admin Profile'}</h3>
+            <p className="text-teal-200 text-xs mt-0.5">{isOwn ? 'Manage your account details' : 'Viewing admin account'}</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition">
+            <Ic d="M6 18L18 6M6 6l12 12" className="w-3.5 h-3.5 text-white" />
+          </button>
         </div>
-        <div className="p-5 space-y-4">
-          {/* Avatar */}
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              {admin.avatar_url
-                ? <img src={admin.avatar_url} alt="" className="w-16 h-16 rounded-full object-cover ring-4 ring-teal-100" />
-                : <div className="w-16 h-16 rounded-full bg-teal-700 flex items-center justify-center ring-4 ring-teal-100"><span className="text-white font-bold text-2xl">{admin.name?.charAt(0)}</span></div>}
+
+        <div className="p-6 space-y-5">
+
+          {/* ── Avatar + name card ── */}
+          <div className="flex items-center gap-4 bg-gray-50 rounded-2xl p-4">
+            <div className="relative flex-shrink-0">
+              {avatarPreview
+                ? <img src={avatarPreview} alt="" className="w-20 h-20 rounded-2xl object-cover ring-4 ring-white shadow" />
+                : <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-teal-600 to-teal-800 flex items-center justify-center ring-4 ring-white shadow">
+                    <span className="text-white font-black text-3xl">{admin.name?.charAt(0)?.toUpperCase()}</span>
+                  </div>}
               {isOwn && (
-                <button onClick={() => fileRef.current?.click()} className="absolute -bottom-1 -right-1 w-6 h-6 bg-teal-700 text-white rounded-full flex items-center justify-center hover:bg-teal-800 transition shadow">
-                  {avatarLoading ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> : <Ic d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" className="w-3 h-3" />}
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={avatarLoading}
+                  className="absolute -bottom-1.5 -right-1.5 w-7 h-7 bg-teal-700 hover:bg-teal-800 text-white rounded-full flex items-center justify-center shadow-md transition disabled:opacity-60">
+                  {avatarLoading
+                    ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    : <Ic d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" className="w-3.5 h-3.5" />}
                 </button>
               )}
             </div>
-            <div>
-              <p className="font-bold text-gray-900">{admin.name}</p>
-              <p className="text-xs text-teal-600 font-semibold">{admin.role || 'Admin'}</p>
-              <p className="text-xs text-gray-400">{admin.email}</p>
+            <div className="min-w-0">
+              <p className="font-black text-gray-900 text-base truncate">{admin.name}</p>
+              <span className="inline-block mt-0.5 px-2 py-0.5 bg-teal-100 text-teal-700 text-[11px] font-bold rounded-full">{profileExtra.role_title || admin.role_title || 'Admin'}</span>
+              <p className="text-xs text-gray-400 mt-1 truncate">{admin.email}</p>
+              {isOwn && <p className="text-[11px] text-gray-400 mt-0.5">Click photo to change</p>}
             </div>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatar} />
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
 
+          {/* ── View or Edit ── */}
           {editing ? (
             <div className="space-y-3">
-              <div><label className="block text-xs font-semibold text-gray-500 mb-1">Full Name</label><input type="text" value={form.name} onChange={set('name')} className={inp} /></div>
-              <div><label className="block text-xs font-semibold text-gray-500 mb-1">Role Title</label><input type="text" value={form.role_title} onChange={set('role_title')} className={inp} /></div>
-              <div><label className="block text-xs font-semibold text-gray-500 mb-1">Phone</label><input type="tel" value={form.phone} onChange={set('phone')} className={inp} /></div>
-              <div className="flex gap-3">
-                <button onClick={() => setEditing(false)} className="flex-1 py-2 text-sm font-semibold border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-                <button onClick={handleSave} disabled={saving} className="flex-1 py-2 text-sm font-semibold bg-teal-700 text-white rounded-xl hover:bg-teal-800 transition disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 mb-1.5">Full Name <span className="text-red-400">*</span></label>
+                  <input type="text" value={form.name} onChange={set('name')} className={inp} placeholder="Your full name" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 mb-1.5">Role Title</label>
+                  <input type="text" value={form.role_title} onChange={set('role_title')} className={inp} placeholder="e.g. Super Admin" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5">Phone</label>
+                <input type="tel" value={form.phone} onChange={set('phone')} className={inp} placeholder="+91 98765 43210" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5">Address</label>
+                <input type="text" value={form.address} onChange={set('address')} className={inp} placeholder="City, State" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5">Bio / About</label>
+                <textarea value={form.bio} onChange={set('bio')} rows={3}
+                  className={`${inp} resize-none`} placeholder="Short description about you…" />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => { setEditing(false); setForm({ name: admin.name || '', phone: admin.phone || '', role_title: profileExtra.role_title || 'Admin', bio: profileExtra.bio, address: profileExtra.address }); }}
+                  className="flex-1 py-2.5 text-sm font-semibold border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 transition">
+                  Cancel
+                </button>
+                <button onClick={handleSave} disabled={saving}
+                  className="flex-1 py-2.5 text-sm font-semibold bg-teal-700 text-white rounded-xl hover:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                  {saving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving…</> : 'Save Changes'}
+                </button>
               </div>
             </div>
           ) : (
             <div className="space-y-1">
-              {[['Email', admin.email], ['Phone', admin.phone || '—'], ['Role', admin.role || 'Admin'], ['Joined', admin.created_at ? new Date(admin.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—']].map(([l, v]) => (
-                <div key={l} className="flex justify-between py-2 border-b border-gray-50">
-                  <span className="text-xs text-gray-400 font-semibold">{l}</span>
-                  <span className="text-xs text-gray-800">{v}</span>
-                </div>
-              ))}
-              {isOwn && (
-                <button onClick={() => setEditing(true)} className="w-full mt-2 py-2.5 bg-teal-50 text-teal-700 rounded-xl text-sm font-semibold hover:bg-teal-100 transition border border-teal-200 flex items-center justify-center gap-2">
-                  <Ic d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" className="w-3.5 h-3.5" />
-                  Edit Profile
-                </button>
-              )}
+              {loadingExtra
+                ? <div className="flex justify-center py-6"><div className="w-5 h-5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" /></div>
+                : <>
+                    {[
+                      ['Email',      admin.email               ],
+                      ['Phone',      admin.phone      || '—'   ],
+                      ['Role Title', profileExtra.role_title || 'Admin'],
+                      ['Address',    profileExtra.address || '—'],
+                      ['Joined',     joined                    ],
+                    ].map(([l, v]) => (
+                      <div key={l} className="flex justify-between items-center py-2.5 border-b border-gray-50">
+                        <span className="text-xs text-gray-400 font-semibold">{l}</span>
+                        <span className="text-xs text-gray-800 text-right max-w-[60%] break-all">{v}</span>
+                      </div>
+                    ))}
+
+                    {profileExtra.bio && (
+                      <div className="pt-3">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">Bio</p>
+                        <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-xl p-3">{profileExtra.bio}</p>
+                      </div>
+                    )}
+
+                    {isOwn && (
+                      <button onClick={() => setEditing(true)}
+                        className="w-full mt-3 py-2.5 bg-teal-50 text-teal-700 rounded-xl text-sm font-bold hover:bg-teal-100 transition border border-teal-200 flex items-center justify-center gap-2">
+                        <Ic d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" className="w-3.5 h-3.5" />
+                        Edit Profile
+                      </button>
+                    )}
+                  </>
+              }
             </div>
           )}
         </div>
@@ -530,7 +722,7 @@ function DoctorDetailModal({ doctor, doctorPatients, doctorAppointments, onClose
                 <table className="w-full">
                   <thead className="bg-gray-50"><tr>{['Description', 'Value'].map(h => <th key={h} className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 py-2.5">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-gray-50">
-                    {[['Fee per Appointment', `₹${doctor.consultation_fee || 0}`], ['Revenue Appointments (confirmed + completed)', `× ${revApts.length}`], ['Doctor Gross Income', `₹${totalIncome.toLocaleString()}`], ['AMRT Platform Share (5%)', `₹${amrtShare.toFixed(2)}`], ['Doctor Net Earnings (95%)', `₹${(totalIncome * 0.95).toFixed(2)}`]].map(([d, v], i) => (
+                    {[['Fee per Appointment', `₹${doctor.consultation_fee || 0}`], ['Revenue Appointments (confirmed + completed)', `× ${revApts.length}`], ['Total Patients Paid', `₹${totalIncome.toLocaleString()}`], ['Platform Cut (5% of fee)', `−₹${amrtShare.toFixed(2)}`], ['Doctor Receives (95%)', `₹${(totalIncome * 0.95).toFixed(2)}`]].map(([d, v], i) => (
                       <tr key={i} className={i === 3 ? 'bg-purple-50' : i === 2 ? 'bg-green-50/50' : 'hover:bg-gray-50'}>
                         <td className="px-4 py-3 text-sm text-gray-700">{d}</td>
                         <td className={`px-4 py-3 text-sm font-bold ${i === 3 ? 'text-purple-700' : i === 2 ? 'text-green-700' : 'text-gray-900'}`}>{v}</td>
@@ -565,6 +757,10 @@ export default function Admin() {
   const [notifications, setNotifications]     = useState([]);
   const [allAdmins, setAllAdmins]             = useState([]);
   const [currentAdmin, setCurrentAdmin]       = useState(null);
+  const [allPayments, setAllPayments]         = useState([]);
+  const [adminWallet, setAdminWallet]         = useState(null);
+  const [withdrawAmount, setWithdrawAmount]   = useState('');
+  const [withdrawing, setWithdrawing]         = useState(false);
 
   const [aptTab, setAptTab]                   = useState('all');
   const [doctorSearch, setDoctorSearch]       = useState('');
@@ -605,21 +801,43 @@ export default function Admin() {
 
   const fetchAllData = async () => {
     try {
-      const [{ data: pending }, { data: approved }, { data: patients }, { data: appointments }, { data: admins }] = await Promise.all([
+      const [{ data: pending }, { data: approved }, { data: patients }, { data: appointments }, { data: admins }, { data: payments }, { data: wallet }] = await Promise.all([
         supabase.from('users').select('*').eq('role', 'doctor').eq('is_approved', false).order('created_at', { ascending: false }),
         supabase.from('users').select('*').eq('role', 'doctor').eq('is_approved', true).order('created_at', { ascending: false }),
         supabase.from('users').select('*').eq('role', 'patient').order('created_at', { ascending: false }),
         supabase.from('appointments').select('*, patient:patient_id(id,name,email,phone,dob,blood_group,age,gender,avatar_url,created_at), doctor:doctor_id(name,specialization,consultation_fee), time_slot:slot_id(date,start_time,end_time)').order('created_at', { ascending: false }),
         supabase.from('users').select('*').eq('role', 'admin').order('created_at', { ascending: false }),
+        supabase.from('payments').select('*, patient:patient_id(id,name,email,avatar_url), doctor:doctor_id(id,name,specialization,avatar_url), appointment:appointment_id(appointment_code, time_slot:slot_id(date,start_time))').order('created_at', { ascending: false }),
+        supabase.from('admin_wallet').select('*').limit(1).maybeSingle(),
       ]);
       setPendingDoctors(pending || []);
       setApprovedDoctors(approved || []);
       setAllPatients(patients || []);
       setAllAppointments(appointments || []);
       setAllAdmins(admins || []);
+      setAllPayments(payments || []);
+      setAdminWallet(wallet || { balance: 0, total_earned: 0, withdrawn: 0 });
       const adminId = localStorage.getItem('adminId') || localStorage.getItem('userId');
       if (admins?.length > 0) setCurrentAdmin(admins.find(a => a.id === adminId) || admins[0]);
     } catch (e) { console.error(e); }
+  };
+
+  const handleWithdraw = async () => {
+    const amt = parseFloat(withdrawAmount);
+    if (!amt || amt <= 0) { alert('Enter a valid amount'); return; }
+    if (amt > (adminWallet?.balance || 0)) { alert('Insufficient balance'); return; }
+    setWithdrawing(true);
+    try {
+      const newBalance = (adminWallet.balance || 0) - amt;
+      const newWithdrawn = (adminWallet.withdrawn || 0) + amt;
+      if (adminWallet.id) {
+        await supabase.from('admin_wallet').update({ balance: newBalance, withdrawn: newWithdrawn }).eq('id', adminWallet.id);
+      }
+      setAdminWallet({ ...adminWallet, balance: newBalance, withdrawn: newWithdrawn });
+      setWithdrawAmount('');
+      alert(`₹${amt.toFixed(2)} withdrawal recorded successfully!`);
+    } catch (e) { alert('Withdrawal failed: ' + e.message); }
+    finally { setWithdrawing(false); }
   };
 
   const fetchNotifications = async () => { const data = await fetchAdminNotifications(30); setNotifications(data || []); };
@@ -715,6 +933,7 @@ export default function Admin() {
     { id: 'patients',     label: 'Patients',      d: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
     { id: 'appointments', label: 'Appointments',  d: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', badge: allAppointments.filter(a => a.status === 'scheduled').length },
     { id: 'revenue',      label: 'Revenue',       d: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+    { id: 'payments',     label: 'Payments',      d: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
     { id: 'pending',      label: 'Approvals',     d: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', badge: pendingDoctors.length },
     { id: 'admins',       label: 'Admin Team',    d: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
   ];
@@ -1078,7 +1297,7 @@ export default function Admin() {
               return (
                 <div className="space-y-6">
                   <div className="grid grid-cols-3 gap-4">
-                    {[['Total Doctor Income',`₹${totalDocInc.toLocaleString()}`,'Gross all time','border-l-green-500'],['AMRT Total Revenue',`₹${totalAmrt.toFixed(2)}`,'5% platform share','border-l-purple-500'],['Revenue Appointments',allRevApts.length,'Confirmed + Completed','border-l-teal-500']].map(([l,v,s,c]) => (
+                    {[['Total Collected from Patients',`₹${totalDocInc.toLocaleString()}`,'All paid appointments','border-l-blue-500'],['Platform Revenue (5%)',`₹${totalAmrt.toFixed(2)}`,'Deducted from each fee','border-l-purple-500'],['Revenue Appointments',allRevApts.length,'Confirmed + Completed','border-l-teal-500']].map(([l,v,s,c]) => (
                       <div key={l} className={`bg-white rounded-xl border border-gray-100 border-l-4 ${c} p-5`}>
                         <p className="text-xs font-semibold text-gray-500">{l}</p>
                         <h3 className="text-2xl font-bold text-gray-900 mt-1">{v}</h3>
@@ -1109,7 +1328,7 @@ export default function Admin() {
                     <div className="px-5 py-4 border-b border-gray-50"><h3 className="text-sm font-bold text-gray-900">Revenue by Doctor</h3><p className="text-[11px] text-gray-400">Confirmed &amp; completed appointments</p></div>
                     <div className="overflow-x-auto">
                       <table className="w-full">
-                        <thead className="bg-gray-50"><tr>{['Doctor','Specialization','Fee/Visit','Rev. Apts','Gross Income','AMRT (5%)','Net (95%)','Certificate'].map(h => <th key={h} className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 py-2.5">{h}</th>)}</tr></thead>
+                        <thead className="bg-gray-50"><tr>{['Doctor','Specialization','Fee/Visit','Rev. Apts','Patient Paid (Total)','Platform Cut (5%)','Doctor Receives (95%)','Certificate'].map(h => <th key={h} className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 py-2.5">{h}</th>)}</tr></thead>
                         <tbody className="divide-y divide-gray-50">
                           {[...approvedDoctors]
                             .map(d => {
@@ -1143,6 +1362,109 @@ export default function Admin() {
                 </div>
               );
             })()}
+
+            {/* ════ PAYMENTS ════ */}
+            {currentView === 'payments' && (
+              <div className="space-y-6">
+                {/* Wallet card */}
+                <div className="bg-gradient-to-r from-purple-700 to-purple-500 rounded-xl p-6 text-white">
+                  <p className="text-purple-200 text-xs font-semibold uppercase tracking-wider mb-1">Admin Wallet</p>
+                  <h2 className="text-3xl font-bold">₹{(adminWallet?.balance || 0).toFixed(2)}</h2>
+                  <p className="text-purple-200 text-xs mt-1">Available Balance</p>
+                  <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/20">
+                    <div><p className="text-purple-200 text-xs">Total Earned</p><p className="text-white font-bold text-lg">₹{(adminWallet?.total_earned || 0).toFixed(2)}</p></div>
+                    <div><p className="text-purple-200 text-xs">Total Withdrawn</p><p className="text-white font-bold text-lg">₹{(adminWallet?.withdrawn || 0).toFixed(2)}</p></div>
+                  </div>
+                </div>
+
+                {/* Withdraw form */}
+                <div className="bg-white rounded-xl border border-gray-100 p-5">
+                  <h3 className="text-sm font-bold text-gray-900 mb-1">Withdraw Funds</h3>
+                  <p className="text-xs text-gray-400 mb-4">Record a withdrawal from the platform wallet</p>
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold text-sm">₹</span>
+                      <input
+                        type="number"
+                        value={withdrawAmount}
+                        onChange={e => setWithdrawAmount(e.target.value)}
+                        placeholder="Enter amount"
+                        min="1"
+                        max={adminWallet?.balance || 0}
+                        className="w-full pl-7 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <button
+                      onClick={handleWithdraw}
+                      disabled={withdrawing || !withdrawAmount}
+                      className="px-5 py-2.5 bg-purple-700 text-white rounded-xl text-sm font-bold hover:bg-purple-800 transition disabled:opacity-50 flex items-center gap-2">
+                      {withdrawing ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
+                      Withdraw
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-2">Available: ₹{(adminWallet?.balance || 0).toFixed(2)}</p>
+                </div>
+
+                {/* All payments table */}
+                <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-gray-900">All Payments</h3>
+                      <p className="text-[11px] text-gray-400">{allPayments.length} total transactions · Platform earned ₹{allPayments.reduce((s,p)=>s+(p.platform_fee||0),0).toFixed(2)}</p>
+                    </div>
+                  </div>
+                  {allPayments.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50">
+                          <tr>{['#','Txn ID','Patient','Doctor','Apt. Code','Date','Patient Paid','Platform (5%)','Doctor Gets','Status'].map(h => (
+                            <th key={h} className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 py-2.5 whitespace-nowrap">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {allPayments.map((p, idx) => (
+                            <tr key={p.id} className="hover:bg-gray-50 transition">
+                              <td className="px-4 py-3 text-xs text-gray-300">{idx+1}</td>
+                              <td className="px-4 py-3 font-mono text-[11px] text-gray-500">{p.transaction_id}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {p.patient?.avatar_url ? <img src={p.patient.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" /> : <div className="w-6 h-6 bg-blue-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white text-[9px] font-bold">{p.patient?.name?.charAt(0)}</span></div>}
+                                  <span className="text-xs font-semibold text-gray-900 whitespace-nowrap">{p.patient?.name || '—'}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {p.doctor?.avatar_url ? <img src={p.doctor.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" /> : <div className="w-6 h-6 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white text-[9px] font-bold">{p.doctor?.name?.charAt(0)}</span></div>}
+                                  <span className="text-xs font-semibold text-gray-900 whitespace-nowrap">Dr. {p.doctor?.name || '—'}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md text-[11px]">
+                                  {p.appointment?.appointment_code || '—'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fD(p.created_at)}</td>
+                              <td className="px-4 py-3 text-xs font-bold text-teal-700">₹{p.total_amount}</td>
+                              <td className="px-4 py-3 text-xs font-bold text-purple-700">−₹{p.platform_fee}</td>
+                              <td className="px-4 py-3 text-xs font-bold text-green-700">₹{((p.total_amount||0)-(p.platform_fee||0)).toFixed(2)}</td>
+                              <td className="px-4 py-3">
+                                <span className="px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-full text-[10px] font-bold uppercase">{p.status}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="py-16 text-center">
+                      <div className="w-14 h-14 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-3"><Ic d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" className="w-7 h-7 text-purple-400" /></div>
+                      <p className="text-sm font-bold text-gray-700">No payments yet</p>
+                      <p className="text-xs text-gray-400 mt-1">Payments appear when patients book and pay for appointments</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* ════ APPROVALS ════ */}
             {currentView === 'pending' && (

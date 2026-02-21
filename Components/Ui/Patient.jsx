@@ -370,9 +370,11 @@ function ChatPanel({ patientData, chatDoctor, onClose }) {
                 return (
                   <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                     {!isMine && (
-                      <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 self-end mb-1">
-                        {chatDoctor.name?.charAt(0)}
-                      </div>
+                      chatDoctor.avatar_url
+                        ? <img src={chatDoctor.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover mr-2 flex-shrink-0 self-end mb-1 ring-1 ring-gray-200" />
+                        : <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 self-end mb-1">
+                          {chatDoctor.name?.charAt(0)}
+                        </div>
                     )}
                     <div className={`max-w-[72%] ${isMine ? 'items-end' : 'items-start'} flex flex-col`}>
                       <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed ${isMine
@@ -397,9 +399,11 @@ function ChatPanel({ patientData, chatDoctor, onClose }) {
         {/* Typing indicator */}
         {otherTyping && (
           <div className="px-4 pb-1 flex items-center gap-2 flex-shrink-0">
-            <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              {chatDoctor.name?.charAt(0)}
-            </div>
+            {chatDoctor.avatar_url
+              ? <img src={chatDoctor.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 ring-1 ring-gray-200" />
+              : <div className="w-7 h-7 rounded-full bg-teal-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                {chatDoctor.name?.charAt(0)}
+              </div>}
             <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-bl-sm px-3.5 py-2 flex items-center gap-1">
               <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -479,11 +483,6 @@ function MyDoctorsView({ patientData, onChat, onDetails }) {
 
   return (
     <div className="p-7">
-      <div className="mb-5">
-        <h2 className="text-lg font-bold text-gray-900">My Doctors</h2>
-        <p className="text-xs text-gray-400 mt-0.5">{myDoctors.length} doctor{myDoctors.length !== 1 ? 's' : ''} from your appointments</p>
-      </div>
-
       {myDoctors.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-100 py-16 text-center">
           <div className="w-14 h-14 bg-teal-50 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -502,8 +501,8 @@ function MyDoctorsView({ patientData, onChat, onDetails }) {
                 {doc.avatar_url
                   ? <img src={doc.avatar_url} alt="" className="w-20 h-20 rounded-full object-cover ring-4 ring-teal-50 shadow-sm group-hover:ring-teal-200 transition" />
                   : <div className="w-20 h-20 bg-gradient-to-br from-teal-500 to-teal-700 rounded-full flex items-center justify-center ring-4 ring-teal-50 shadow-sm group-hover:ring-teal-200 transition">
-                      <span className="text-white font-bold text-2xl">{doc.name?.charAt(0)}</span>
-                    </div>}
+                    <span className="text-white font-bold text-2xl">{doc.name?.charAt(0)}</span>
+                  </div>}
                 {/* Verified dot */}
                 <span className="absolute bottom-0.5 right-0.5 w-5 h-5 bg-green-500 border-2 border-white rounded-full flex items-center justify-center">
                   <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
@@ -613,18 +612,24 @@ function MessagesView({ patientData, doctors, onOpenChat }) {
         ) : (
           <div className="divide-y divide-gray-50">
             {conversations.map(({ doctor, lastMsg, unread }) => (
-              <button key={doctor.id} onClick={() => onOpenChat(doctor)}
+              <button key={doctor.id} onClick={() => {
+                // Clear this conversation's unread badge immediately
+                setConversations(prev => prev.map(c =>
+                  c.doctor.id === doctor.id ? { ...c, unread: 0 } : c
+                ));
+                onOpenChat(doctor, fetchConversations);
+              }}
                 className="w-full flex items-center space-x-3 px-5 py-4 hover:bg-gray-50 transition text-left">
                 {doctor.avatar_url
-                  ? <img src={doctor.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                  ? <img src={doctor.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0 ring-2 ring-gray-100" />
                   : <div className="w-11 h-11 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold">{doctor.name?.charAt(0)}</span></div>}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <p className="font-semibold text-gray-900 text-sm">Dr. {doctor.name}</p>
+                    <p className={`text-sm ${unread > 0 ? 'font-bold text-gray-900' : 'font-semibold text-gray-900'}`}>Dr. {doctor.name}</p>
                     <p className="text-xs text-gray-400">{formatTime(lastMsg.created_at)}</p>
                   </div>
                   <div className="flex items-center justify-between mt-0.5">
-                    <p className="text-xs text-gray-500 truncate pr-2">
+                    <p className={`text-xs truncate pr-2 ${unread > 0 ? 'text-gray-800 font-medium' : 'text-gray-500'}`}>
                       {lastMsg.sender_id === patientData.id ? 'You: ' : ''}{lastMsg.content}
                     </p>
                     {unread > 0 && (
@@ -645,6 +650,281 @@ function MessagesView({ patientData, doctors, onOpenChat }) {
 }
 
 /* ══════════════════════════════════════════════════
+   SYMPTOM CHECKER — GROQ AI CHATBOT
+══════════════════════════════════════════════════ */
+function SymptomCheckerPanel({ patientData }) {
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      content: `Hello ${patientData?.name?.split(' ')[0] || 'there'}. I am a symptom checker assistant. Describe your symptoms and I will help you understand possible causes and whether you should seek medical attention. Please note: this is not a substitute for professional medical advice.`,
+    },
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setError('');
+
+    const newMessages = [...messages, { role: 'user', content: text }];
+    setMessages(newMessages);
+    setLoading(true);
+
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a medical symptom checker assistant for a healthcare platform. The patient's name is ${patientData?.name || 'the user'}. 
+Your role is to:
+1. Ask clarifying questions about symptoms (duration, severity, location, associated symptoms).
+2. Provide a brief, clear assessment of possible conditions.
+3. Recommend urgency level: Emergency (go to ER now), Urgent (see doctor within 24 hours), Routine (schedule an appointment), or Self-care (home treatment likely sufficient).
+4. Suggest basic self-care steps where appropriate.
+5. Always remind patients you are an AI and cannot replace a doctor.
+Keep responses concise, professional, and structured. Never diagnose definitively. Always err on the side of caution for serious symptoms.`,
+            },
+            ...newMessages.map(m => ({ role: m.role, content: m.content })),
+          ],
+          max_tokens: 500,
+          temperature: 0.4,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `API error ${res.status}`);
+      }
+
+      const data = await res.json();
+      const reply = data.choices?.[0]?.message?.content || 'I could not process your request. Please try again.';
+      setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+    } catch (err) {
+      setError(err.message || 'Failed to get response. Check your GROQ API key.');
+      // Remove the user message we optimistically added if request failed
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  const clearChat = () => {
+    setMessages([{
+      role: 'assistant',
+      content: `Hello ${patientData?.name?.split(' ')[0] || 'there'}. I am a symptom checker assistant. Describe your symptoms and I will help you understand possible causes and whether you should seek medical attention. Please note: this is not a substitute for professional medical advice.`,
+    }]);
+    setError('');
+  };
+
+  const QUICK_PROMPTS = [
+    'I have a headache and fever',
+    'I feel chest pain and shortness of breath',
+    'I have a sore throat and cough',
+    'I have stomach pain and nausea',
+  ];
+
+  return (
+    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
+
+      {/* ── LEFT IMAGE PANEL ── */}
+      <div className="hidden lg:flex w-80 xl:w-96 flex-shrink-0 relative flex-col overflow-hidden">
+        {/* Background image */}
+        <img
+          src="https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=800&q=80"
+          alt="Medical"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+        {/* Dark gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-b from-teal-900/80 via-teal-800/70 to-gray-900/90" />
+
+        {/* Content over image */}
+        <div className="relative z-10 flex flex-col h-full p-8 justify-between">
+          {/* Top badge */}
+          <div>
+            <div className="inline-flex items-center gap-2 bg-white/15 backdrop-blur-sm border border-white/20 rounded-full px-3 py-1.5 mb-8">
+              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+              <span className="text-white text-xs font-semibold tracking-wide">AI-Powered</span>
+            </div>
+
+            <h2 className="text-2xl font-bold text-white leading-snug mb-3">
+              Smart Symptom<br />Analysis
+            </h2>
+            <p className="text-teal-200 text-sm leading-relaxed">
+              Describe your symptoms and our AI will help assess possible conditions and recommend the right level of care.
+            </p>
+          </div>
+
+          {/* Feature list */}
+          <div className="space-y-3 my-auto py-8">
+            {[
+              { icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', label: 'Instant symptom assessment' },
+              { icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', label: 'Urgency level guidance' },
+              { icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z', label: 'Doctor referral suggestions' },
+              { icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z', label: 'Private & confidential' },
+            ].map((f, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-white/15 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-teal-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={f.icon} />
+                  </svg>
+                </div>
+                <span className="text-sm text-white/85 font-medium">{f.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Disclaimer footer */}
+          <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-xl p-4">
+            <p className="text-xs text-teal-200 leading-relaxed">
+              <span className="font-bold text-white">Disclaimer:</span> This tool is for informational purposes only and does not constitute medical advice. Always consult a qualified doctor for diagnosis and treatment.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── RIGHT CHAT PANEL ── */}
+      <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
+        {/* Chat header */}
+        <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-teal-700 rounded-xl flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-gray-900">AI Symptom Checker</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                <p className="text-xs text-gray-400">Powered by Groq · llama-3.1-8b-instant</p>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={clearChat}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            New Chat
+          </button>
+        </div>
+
+        {/* Messages area */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {messages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2.5`}>
+              {msg.role === 'assistant' && (
+                <div className="w-8 h-8 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0 self-end mb-1 shadow-sm">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                </div>
+              )}
+              <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
+                msg.role === 'user'
+                  ? 'bg-teal-700 text-white rounded-br-sm'
+                  : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
+              }`}>
+                {msg.content}
+              </div>
+              {msg.role === 'user' && (
+                <div className="w-8 h-8 bg-teal-100 rounded-full flex items-center justify-center flex-shrink-0 self-end mb-1 shadow-sm">
+                  <span className="text-teal-700 text-xs font-bold">{patientData?.name?.charAt(0) || 'P'}</span>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex justify-start gap-2.5">
+              <div className="w-8 h-8 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0 self-end mb-1 shadow-sm">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <div className="bg-white border border-gray-100 px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-1.5 shadow-sm">
+                <div className="w-2 h-2 bg-teal-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-2 h-2 bg-teal-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-2 h-2 bg-teal-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700 flex items-start gap-2">
+              <svg className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {error}
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Quick prompts — only show on first load */}
+        {messages.length === 1 && (
+          <div className="px-6 pb-3 flex flex-wrap gap-2 flex-shrink-0">
+            {QUICK_PROMPTS.map((p, i) => (
+              <button key={i} onClick={() => { setInput(p); inputRef.current?.focus(); }}
+                className="px-3 py-1.5 text-xs font-medium text-teal-700 bg-white border border-teal-100 rounded-lg hover:bg-teal-50 hover:border-teal-300 transition shadow-sm">
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Input bar */}
+        <div className="bg-white border-t border-gray-100 px-6 py-4 flex gap-3 flex-shrink-0">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Describe your symptoms in detail..."
+            rows={2}
+            className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition bg-gray-50"
+          />
+          <button
+            onClick={sendMessage}
+            disabled={!input.trim() || loading}
+            className="px-5 bg-teal-700 text-white rounded-xl font-semibold text-sm hover:bg-teal-800 transition disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 flex flex-col items-center justify-center gap-1 min-w-[72px]">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
+            <span className="text-xs">Send</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════
    MAIN PATIENT DASHBOARD
 ══════════════════════════════════════════════════ */
 export default function PatientDashboard() {
@@ -654,6 +934,7 @@ export default function PatientDashboard() {
   const [loading, setLoading] = useState(true);
   const [viewingDoctor, setViewingDoctor] = useState(null);
   const [chatDoctor, setChatDoctor] = useState(null);
+  const messagesRefetchRef = useRef(null); // holds MessagesView's fetchConversations
 
   const [currentView, setCurrentView] = useState('dashboard');
   const [selectedDoctor, setSelectedDoctor] = useState(null);
@@ -730,6 +1011,7 @@ export default function PatientDashboard() {
         fetchPendingRequests();
         fetchHealthDetails();
         fetchUnreadMsgCount();
+        fetchPayments();
       }
     }
   }, [isAuthenticated, patientData?.id]);
@@ -1021,29 +1303,203 @@ export default function PatientDashboard() {
     } finally { setLoading(false); }
   };
 
-  const handleBookAppointment = async () => {
+  // ── Payment State ─────────────────────────────────────────────
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [payments, setPayments] = useState([]);
+
+  const fetchPayments = async () => {
+    const { data } = await supabase
+      .from('payments')
+      .select('*, appointment:appointment_id(*, doctor:doctor_id(name,specialization,avatar_url), time_slot:slot_id(date,start_time))')
+      .eq('patient_id', patientData?.id)
+      .order('created_at', { ascending: false });
+    if (data) setPayments(data);
+  };
+
+  // Generate unique appointment code
+  const generateAppointmentCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = 'APT-';
+    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  };
+
+  const handleBookAppointment = () => {
     if (!selectedSlot) { alert('Please select a time slot'); return; }
-    setLoading(true);
+    // Show payment modal instead of booking directly
+    setShowPaymentModal(true);
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!selectedSlot) return;
+    setPaymentProcessing(true);
     try {
+      const fee = selectedDoctor.consultation_fee || 0;
+      const platformFee = +(fee * 0.05).toFixed(2);
+      const doctorNet = +(fee - platformFee).toFixed(2);
+
+      // ── STEP 1: Book the appointment FIRST so it exists in the DB ──
       const { data, error } = await supabase.rpc('book_appointment', {
         p_slot_id: selectedSlot.id, p_patient_id: patientData.id,
         p_doctor_id: selectedDoctor.id, p_symptoms: symptoms || null, p_notes: notes || null
       });
       if (error) throw error;
       if (!data.success) throw new Error(data.error);
+      const appointmentId = data.id;
+
+      // ── STEP 2: Fetch this appointment's exact created_at timestamp ──
+      const { data: thisAppt } = await supabase
+        .from('appointments')
+        .select('id, created_at')
+        .eq('id', appointmentId)
+        .single();
+
+      // ── STEP 3: Count how many non-cancelled appointments for this slot
+      //    were created AT OR BEFORE this one — that count IS the token number.
+      //    Using created_at comparison makes this race-condition safe: each
+      //    patient's row already exists when we count, so no two patients
+      //    will ever share the same position. ──
+      const { count: tokenNumber } = await supabase
+        .from('appointments')
+        .select('id', { count: 'exact', head: true })
+        .eq('slot_id', selectedSlot.id)
+        .not('status', 'in', '(cancelled,rejected)')
+        .lte('created_at', thisAppt.created_at);
+
+      const safeToken = tokenNumber || 1;
+
+      // ── STEP 4: Calculate reporting time from token position ──
+      const parseMin = (t = '') => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+      const slotStartMin = parseMin(selectedSlot.start_time);
+      const slotEndMin = parseMin(selectedSlot.end_time);
+      const maxPat = selectedSlot.max_patients || 1;
+      const gapMin = Math.floor((slotEndMin - slotStartMin) / maxPat);
+      const reportMin = slotStartMin + (safeToken - 1) * gapMin;
+      const rHr = Math.floor(reportMin / 60), rMin = reportMin % 60;
+      const reportingTime = `${String(rHr).padStart(2, '0')}:${String(rMin).padStart(2, '0')}`;
+      const rHr12 = rHr % 12 || 12, ampm = rHr >= 12 ? 'PM' : 'AM';
+      const reportingTimeDisplay = `${rHr12}:${String(rMin).padStart(2, '0')} ${ampm}`;
+
+      // ── Appointment code encodes the token: APT-T001-XXXX ──
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let suffix = ''; for (let i = 0; i < 4; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
+      const appointmentCode = `APT-T${String(safeToken).padStart(3, '0')}-${suffix}`;
+
+      // ── STEP 5: Update appointment with confirmed status, code, token & reporting_time ──
+      await supabase.from('appointments').update({
+        status: 'confirmed',
+        appointment_code: appointmentCode,
+        payment_status: 'paid',
+        token_number: safeToken,
+        report_time: reportingTime,
+      }).eq('id', appointmentId);
+
+      // 3. Record payment
+      await supabase.from('payments').insert([{
+        appointment_id: appointmentId, patient_id: patientData.id, doctor_id: selectedDoctor.id,
+        doctor_fee: fee, platform_fee: platformFee, total_amount: fee,
+        status: 'paid', payment_method: 'fake_payment',
+        transaction_id: `TXN-${Date.now()}`, created_at: new Date().toISOString(),
+      }]);
+
+      // 4. Credit admin wallet (5%)
+      const { data: wallet } = await supabase.from('admin_wallet').select('*').limit(1).single();
+      if (wallet) {
+        await supabase.from('admin_wallet').update({
+          balance: (wallet.balance || 0) + platformFee,
+          total_earned: (wallet.total_earned || 0) + platformFee,
+        }).eq('id', wallet.id);
+      } else {
+        await supabase.from('admin_wallet').insert([{ balance: platformFee, total_earned: platformFee, withdrawn: 0 }]);
+      }
+
+      // 5. Notification to doctor
       await supabase.from('notifications').insert([{
         user_id: selectedDoctor.id, type: 'new_appointment',
-        title: 'New Appointment Booked',
-        message: `Appointment on ${selectedDate} at ${selectedSlot.start_time}`,
-        related_id: data.id
+        title: 'New Paid Appointment',
+        message: `${patientData.name} booked (Token #${safeToken}, report by ${reportingTimeDisplay}) on ${selectedDate}. Code: ${appointmentCode}`,
+        related_id: appointmentId
       }]);
-      setShowBookingModal(false); setSelectedDoctor(null); setSelectedDate(null); setSelectedSlot(null);
+
+      // 6. Notification to patient
+      await supabase.from('notifications').insert([{
+        user_id: patientData.id, type: 'appointment_confirmed',
+        title: 'Appointment Confirmed & Paid',
+        message: `Confirmed with Dr. ${selectedDoctor.name} on ${selectedDate}. Token: #${safeToken} · Report by ${reportingTimeDisplay}. Code: ${appointmentCode}`,
+        related_id: appointmentId
+      }]);
+
+      // 7. Send confirmation email
+      const dateStr = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      try {
+        await fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: patientData.email,
+            subject: `Appointment Confirmed — Token #${safeToken} | Report by ${reportingTimeDisplay}`,
+            html: `<div style="font-family:Inter,sans-serif;max-width:580px;margin:0 auto;background:#f9fafb;">
+              <div style="background:#0f766e;padding:28px 32px;border-radius:12px 12px 0 0;">
+                <p style="color:#99f6e4;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px;">AMRT Health Platform</p>
+                <h1 style="color:#fff;font-size:22px;margin:0;font-weight:800;">Appointment Confirmed</h1>
+              </div>
+              <div style="background:#fff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+                <p style="color:#374151;font-size:14px;">Hi <strong>${patientData.name}</strong>,</p>
+                <p style="color:#6b7280;font-size:13px;margin-top:4px;">Your appointment has been confirmed and payment received.</p>
+
+                <div style="display:flex;gap:12px;margin:20px 0;">
+                  <div style="flex:1;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:16px;text-align:center;">
+                    <p style="margin:0 0 6px;font-size:10px;color:#166534;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Token Number</p>
+                    <p style="margin:0;font-size:40px;font-weight:900;color:#15803d;line-height:1;">#${safeToken}</p>
+                    <p style="margin:8px 0 0;font-size:11px;color:#86efac;">Your queue position</p>
+                  </div>
+                  <div style="flex:1;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:10px;padding:16px;text-align:center;">
+                    <p style="margin:0 0 6px;font-size:10px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Report By</p>
+                    <p style="margin:0;font-size:30px;font-weight:900;color:#1d4ed8;line-height:1;">${reportingTimeDisplay}</p>
+                    <p style="margin:8px 0 0;font-size:11px;color:#93c5fd;">Your allocated time</p>
+                  </div>
+                </div>
+
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin:16px 0;">
+                  <p style="margin:0 0 4px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Appointment Code</p>
+                  <p style="margin:0;font-size:20px;font-weight:800;color:#0f172a;letter-spacing:.1em;font-family:monospace;">${appointmentCode}</p>
+                  <p style="margin:6px 0 0;font-size:11px;color:#94a3b8;">Show this at the front desk on arrival</p>
+                </div>
+
+                <table style="width:100%;border-collapse:collapse;font-size:13px;margin:16px 0;">
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#6b7280;">Doctor</td><td style="padding:8px 0;font-weight:600;color:#0f172a;text-align:right;">Dr. ${selectedDoctor.name}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#6b7280;">Specialization</td><td style="padding:8px 0;font-weight:600;color:#0f172a;text-align:right;">${selectedDoctor.specialization}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#6b7280;">Date</td><td style="padding:8px 0;font-weight:600;color:#0f172a;text-align:right;">${dateStr}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#6b7280;">Slot</td><td style="padding:8px 0;font-weight:600;color:#0f172a;text-align:right;">${formatTime(selectedSlot.start_time)} – ${formatTime(selectedSlot.end_time)}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#1d4ed8;font-weight:600;">Your Reporting Time</td><td style="padding:8px 0;font-weight:700;color:#1d4ed8;text-align:right;">${reportingTimeDisplay}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#15803d;font-weight:600;">Queue Token</td><td style="padding:8px 0;font-weight:700;color:#15803d;text-align:right;">#${safeToken}</td></tr>
+                  <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:8px 0;color:#6b7280;">Consultation Fee</td><td style="padding:8px 0;font-weight:600;color:#0f172a;text-align:right;">₹${fee}</td></tr>
+                  <tr style="border-top:2px solid #e5e7eb;"><td style="padding:10px 0 6px;color:#0f172a;font-size:14px;font-weight:700;">You Paid</td><td style="padding:10px 0 6px;font-weight:800;color:#0f766e;font-size:16px;text-align:right;">₹${fee}</td></tr>
+                </table>
+
+                <div style="background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:12px 16px;margin-top:8px;">
+                  <p style="margin:0;font-size:12px;color:#713f12;line-height:1.6;"><strong>Reminder:</strong> Please arrive at the clinic and check in at reception by <strong>${reportingTimeDisplay}</strong>. Present your code <strong style="font-family:monospace;">${appointmentCode}</strong> or this email to the front desk.</p>
+                </div>
+
+                <p style="color:#94a3b8;font-size:11px;margin-top:24px;text-align:center;">AMRT Health Platform · Automated confirmation — do not reply</p>
+              </div>
+            </div>`,
+          }),
+        });
+      } catch (_) { /* email is optional */ }
+
+      setShowPaymentModal(false);
+      setShowBookingModal(false);
+      setSelectedDoctor(null); setSelectedDate(null); setSelectedSlot(null);
       setSymptoms(''); setNotes('');
-      fetchAppointments(); setCurrentView('appointments');
+      fetchAppointments();
+      fetchPayments();
+      setCurrentView('appointments');
     } catch (err) {
-      console.error('Booking error:', err);
-      alert('Failed to book appointment. Please try again.');
-    } finally { setLoading(false); }
+      console.error('Payment/booking error:', err);
+      alert('Failed to process payment. Please try again.');
+    } finally { setPaymentProcessing(false); }
   };
 
   const handleLogout = async () => {
@@ -1156,8 +1612,10 @@ export default function PatientDashboard() {
     { id: 'appointments', label: 'Appointments', badge: upcomingAppointments.length, d: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
     { id: 'doctors', label: 'Find Doctors', d: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
     { id: 'mydoctors', label: 'My Doctors', d: 'M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z' },
+    { id: 'payments', label: 'Payments', badge: payments.length, d: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
     { id: 'records', label: 'Medical Records', d: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
     { id: 'messages', label: 'Messages', badge: unreadMsgCount, d: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
+    { id: 'symptomchecker', label: 'Symptom Checker', d: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
     { id: 'profile', label: 'Profile', d: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
   ];
 
@@ -1180,14 +1638,21 @@ export default function PatientDashboard() {
 
       {/* ── Sidebar ── */}
       <aside className="fixed left-0 top-0 h-full w-60 bg-white border-r border-gray-100 z-40 flex flex-col">
+        {/* Logo */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center">
           <img src="/amrt-logo.png" alt="AMRT" className="h-7 w-auto object-contain"
             onError={e => { e.target.style.display = 'none'; }} />
         </div>
+
+        {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {navItems.map(item => (
             <button key={item.id} onClick={() => setCurrentView(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-sm ${currentView === item.id ? 'bg-teal-700 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'}`}>
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-sm ${
+                currentView === item.id
+                  ? 'bg-teal-700 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'
+              }`}>
               <div className="flex items-center space-x-2.5">
                 <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={item.d} />
@@ -1195,7 +1660,9 @@ export default function PatientDashboard() {
                 <span className="font-medium">{item.label}</span>
               </div>
               {item.badge > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${currentView === item.id ? 'bg-white/20 text-white' : 'bg-teal-100 text-teal-700'}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
+                  currentView === item.id ? 'bg-white/20 text-white' : 'bg-teal-100 text-teal-700'
+                }`}>
                   {item.badge}
                 </span>
               )}
@@ -1216,7 +1683,9 @@ export default function PatientDashboard() {
                 {currentView === 'doctors' && 'Find Doctors'}
                 {currentView === 'mydoctors' && 'My Doctors'}
                 {currentView === 'records' && 'Medical Records'}
+                {currentView === 'payments' && 'My Payments'}
                 {currentView === 'messages' && 'Messages'}
+                {currentView === 'symptomchecker' && 'Symptom Checker'}
                 {currentView === 'profile' && 'My Profile'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
@@ -1628,7 +2097,96 @@ export default function PatientDashboard() {
 
         {/* ══════════ MESSAGES ══════════ */}
         {currentView === 'messages' && (
-          <MessagesView patientData={patientData} doctors={doctors} onOpenChat={(doc) => setChatDoctor(doc)} />
+          <MessagesView
+            patientData={patientData}
+            doctors={doctors}
+            onOpenChat={(doc, refetch) => {
+              if (refetch) messagesRefetchRef.current = refetch;
+              setChatDoctor(doc);
+            }}
+          />
+        )}
+
+        {/* ══════════ SYMPTOM CHECKER ══════════ */}
+        {currentView === 'symptomchecker' && (
+          <SymptomCheckerPanel patientData={patientData} />
+        )}
+
+        {/* ══════════ PAYMENTS ══════════ */}
+        {currentView === 'payments' && (
+          <div className="p-7">
+            {/* Summary cards */}
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              {[
+                { label: 'Total Paid', value: `₹${payments.reduce((s, p) => s + (p.total_amount || 0), 0).toLocaleString('en-IN')}`, color: 'border-l-teal-500', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+                { label: 'Transactions', value: payments.length, color: 'border-l-blue-500', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
+                { label: 'Platform Cut (5%)', value: `₹${payments.reduce((s, p) => s + (p.platform_fee || 0), 0).toLocaleString('en-IN')}`, color: 'border-l-purple-500', icon: 'M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z' },
+              ].map(s => (
+                <div key={s.label} className={`bg-white rounded-xl border border-gray-100 border-l-4 ${s.color} p-5`}>
+                  <p className="text-xs font-semibold text-gray-500">{s.label}</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">{s.value}</h3>
+                </div>
+              ))}
+            </div>
+
+            {payments.length > 0 ? (
+              <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-50">
+                  <h3 className="text-sm font-bold text-gray-900">Payment History</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">All your transactions</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-100">
+                        {['#', 'Transaction ID', 'Doctor', 'Date & Time', 'Apt. Code', 'You Paid', 'Platform (5%)', 'Doctor Gets', 'Status'].map(h => (
+                          <th key={h} className="text-left px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {payments.map((p, idx) => (
+                        <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-gray-300 font-medium">{idx + 1}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-500">{p.transaction_id}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              {p.appointment?.doctor?.avatar_url
+                                ? <img src={p.appointment.doctor.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                : <div className="w-6 h-6 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white text-[9px] font-bold">{p.appointment?.doctor?.name?.charAt(0)}</span></div>}
+                              <span className="font-semibold text-gray-800 whitespace-nowrap">Dr. {p.appointment?.doctor?.name || '—'}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(p.created_at)}</td>
+                          <td className="px-4 py-3">
+                            <span className="font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md text-[11px]">
+                              {p.appointment?.appointment_code || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-bold text-teal-700">₹{p.total_amount}</td>
+                          <td className="px-4 py-3 text-purple-600 font-semibold">−₹{p.platform_fee}</td>
+                          <td className="px-4 py-3 font-semibold text-green-700">₹{((p.total_amount || 0) - (p.platform_fee || 0)).toFixed(2)}</td>
+                          <td className="px-4 py-3">
+                            <span className="px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-full text-[10px] font-bold uppercase">
+                              {p.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-100 p-16 text-center">
+                <div className="w-14 h-14 bg-teal-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <svg className="w-7 h-7 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                </div>
+                <p className="text-sm font-bold text-gray-800">No payments yet</p>
+                <p className="text-xs text-gray-400 mt-1">Book an appointment to see your payment history</p>
+              </div>
+            )}
+          </div>
         )}
 
         {/* ══════════ MEDICAL RECORDS ══════════ */}
@@ -1655,8 +2213,8 @@ export default function PatientDashboard() {
                             {record.doctor?.avatar_url
                               ? <img src={record.doctor.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 ring-1 ring-teal-100 shadow-sm" />
                               : <div className="w-7 h-7 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
-                                  <span className="text-white font-bold text-[10px]">{record.doctor?.name?.charAt(0)}</span>
-                                </div>}
+                                <span className="text-white font-bold text-[10px]">{record.doctor?.name?.charAt(0)}</span>
+                              </div>}
                             <span className="text-gray-700 font-medium">Dr. {record.doctor?.name || '—'}</span>
                           </div>
                         </td>
@@ -2018,7 +2576,12 @@ export default function PatientDashboard() {
         <ChatPanel
           patientData={patientData}
           chatDoctor={chatDoctor}
-          onClose={() => { setChatDoctor(null); fetchUnreadMsgCount(); }}
+          onClose={() => {
+            setChatDoctor(null);
+            fetchUnreadMsgCount();
+            // Re-fetch messages list so unread counts update
+            if (messagesRefetchRef.current) messagesRefetchRef.current();
+          }}
         />
       )}
 
@@ -2140,7 +2703,7 @@ export default function PatientDashboard() {
                 </button>
                 <button onClick={handleBookAppointment} disabled={!selectedSlot || loading}
                   className={`flex-1 px-5 py-2.5 rounded-xl text-sm font-bold transition ${selectedSlot && !loading ? 'bg-teal-700 text-white hover:bg-teal-800' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
-                  {loading ? 'Booking...' : 'Confirm Appointment'}
+                  {loading ? 'Checking...' : 'Continue to Payment'}
                 </button>
               </div>
             </div>
@@ -2199,6 +2762,102 @@ export default function PatientDashboard() {
           </div>
         </div>
       )}
+
+      {/* ══════════ FAKE PAYMENT MODAL ══════════ */}
+      {showPaymentModal && selectedDoctor && selectedSlot && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-teal-700 to-teal-500 px-6 py-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-teal-200 text-xs font-semibold uppercase tracking-wider">Secure Checkout</p>
+                  <h2 className="text-white font-bold text-lg mt-0.5">Confirm & Pay</h2>
+                </div>
+                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Doctor info */}
+              <div className="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
+                {selectedDoctor.avatar_url
+                  ? <img src={selectedDoctor.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
+                  : <div className="w-12 h-12 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-lg">{selectedDoctor.name?.charAt(0)}</span></div>}
+                <div>
+                  <p className="font-bold text-gray-900 text-sm">Dr. {selectedDoctor.name}</p>
+                  <p className="text-xs text-teal-600">{selectedDoctor.specialization}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {selectedDate && new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {' · '}{formatTime(selectedSlot.start_time)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Price breakdown */}
+              <div className="bg-gray-50 rounded-xl p-4 space-y-2.5">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Payment Summary</p>
+                {(() => {
+                  const fee = selectedDoctor.consultation_fee || 0;
+                  const platformFee = +(fee * 0.05).toFixed(2);
+                  const doctorNet = +(fee - platformFee).toFixed(2);
+                  return (
+                    <>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700 font-medium">Consultation Fee</span>
+                        <span className="text-sm font-bold text-gray-900">₹{fee}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-gray-400 pl-1">
+                        <span>↳ Platform charge (5% of fee)</span>
+                        <span className="text-purple-500 font-semibold">−₹{platformFee}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-gray-400 pl-1">
+                        <span>↳ Doctor receives</span>
+                        <span className="text-green-600 font-semibold">₹{doctorNet}</span>
+                      </div>
+                      <div className="border-t border-dashed border-gray-200 pt-2.5 flex justify-between items-center">
+                        <span className="text-base font-bold text-gray-900">You Pay</span>
+                        <span className="text-xl font-bold text-teal-700">₹{fee}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Fake payment note */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <div>
+                  <p className="text-xs font-bold text-amber-800">Demo Payment Mode</p>
+                  <p className="text-xs text-amber-700 mt-0.5">This is a simulated payment for demo purposes. No real money is charged. Click "Confirm & Pay" to instantly confirm your appointment.</p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="flex-1 py-3 border border-gray-200 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-50 transition">
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmPayment}
+                  disabled={paymentProcessing}
+                  className="flex-1 py-3 bg-teal-700 text-white rounded-xl text-sm font-bold hover:bg-teal-800 transition disabled:opacity-60 flex items-center justify-center gap-2">
+                  {paymentProcessing ? (
+                    <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Processing…</>
+                  ) : (
+                    <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>Confirm & Pay</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

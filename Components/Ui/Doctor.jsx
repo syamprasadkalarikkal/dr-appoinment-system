@@ -131,9 +131,11 @@ function DoctorChatPanel({ doctorData, patient, onBack }) {
               return (
                 <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   {!isMine && (
-                    <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 self-end mb-1">
-                      {patient.name?.charAt(0)}
-                    </div>
+                    patient.avatar_url
+                      ? <img src={patient.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover mr-2 flex-shrink-0 self-end mb-1 ring-1 ring-gray-200" />
+                      : <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 self-end mb-1">
+                        {patient.name?.charAt(0)}
+                      </div>
                   )}
                   <div className={`max-w-[70%] flex flex-col ${isMine ? 'items-end' : 'items-start'}`}>
                     <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed ${isMine ? 'bg-teal-700 text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 shadow-sm rounded-bl-sm'}`}>
@@ -222,7 +224,7 @@ function DoctorMessagesView({ doctorData, onReadMessages }) {
       : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  if (activePatient) return <DoctorChatPanel doctorData={doctorData} patient={activePatient} onBack={() => { setActivePatient(null); fetchConversations(); if (onReadMessages) onReadMessages(); }} />;
+  if (activePatient) return <DoctorChatPanel doctorData={doctorData} patient={activePatient} onBack={() => { setActivePatient(null); fetchConversations(); }} />;
 
   return (
     <div style={{ height: 'calc(100vh - 65px)', overflowY: 'auto' }}>
@@ -245,10 +247,17 @@ function DoctorMessagesView({ doctorData, onReadMessages }) {
       ) : (
         <div className="divide-y divide-gray-50">
           {conversations.map(({ patient, lastMsg, unread }) => (
-            <button key={patient.id} onClick={() => { setActivePatient(patient); if (onReadMessages) onReadMessages(); }}
+            <button key={patient.id} onClick={() => {
+              // Clear badge immediately in local state
+              setConversations(prev => prev.map(c =>
+                c.patient.id === patient.id ? { ...c, unread: 0 } : c
+              ));
+              setActivePatient(patient);
+              if (onReadMessages) onReadMessages();
+            }}
               className="w-full flex items-center space-x-3 px-7 py-4 hover:bg-gray-50 transition text-left">
               {patient.avatar_url
-                ? <img src={patient.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                ? <img src={patient.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0 ring-2 ring-gray-100" />
                 : <div className="w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold">{patient.name?.charAt(0)}</span></div>}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
@@ -469,9 +478,20 @@ export default function Doctor() {
   const [locating2, setLocating2] = useState(false);
   const [profileSaveMsg, setProfileSaveMsg] = useState('');
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
+  const [doctorPayments, setDoctorPayments] = useState([]);
+  const [checkinCode, setCheckinCode] = useState('');
+  const [checkinResult, setCheckinResult] = useState(null);
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const [checkinError, setCheckinError] = useState('');
+  const [checkinReportType, setCheckinReportType] = useState('prescription');
+  const [checkinReportTitle, setCheckinReportTitle] = useState('');
+  const [checkinReportDesc, setCheckinReportDesc] = useState('');
+  const [checkinReportFile, setCheckinReportFile] = useState(null);
+  const [checkinReportSaving, setCheckinReportSaving] = useState(false);
+  const [checkinReportSuccess, setCheckinReportSuccess] = useState(false);
 
   useEffect(() => { checkAuth(); }, []);
-  useEffect(() => { if (isAuthenticated && isApproved && profileCompleted && doctorData) { fetchAppointments(); fetchTimeSlots(); fetchAllPatients(); fetchUnreadMsgCount(); } }, [isAuthenticated, isApproved, profileCompleted, doctorData?.id]);
+  useEffect(() => { if (isAuthenticated && isApproved && profileCompleted && doctorData) { fetchAppointments(); fetchTimeSlots(); fetchAllPatients(); fetchUnreadMsgCount(); fetchDoctorPayments(); } }, [isAuthenticated, isApproved, profileCompleted, doctorData?.id]);
 
   useEffect(() => {
     if (!doctorData?.id) return;
@@ -496,6 +516,67 @@ export default function Doctor() {
   }, [doctorData?.id]);
 
   const fetchUnreadMsgCount = async () => { if (!doctorData?.id) return; const { count } = await supabase.from('messages').select('*', { count: 'exact', head: true }).eq('receiver_id', doctorData.id).eq('is_read', false); setUnreadMsgCount(count || 0); };
+  const fetchDoctorPayments = async () => { if (!doctorData?.id) return; const { data } = await supabase.from('payments').select('*, appointment:appointment_id(appointment_code, time_slot:slot_id(date,start_time)), patient:patient_id(id,name,email,avatar_url)').eq('doctor_id', doctorData.id).order('created_at', { ascending: false }); if (data) setDoctorPayments(data); };
+  const handlePatientCheckin = async () => {
+    if (!checkinCode.trim()) { setCheckinError('Please enter a code'); return; }
+    setCheckinLoading(true); setCheckinError(''); setCheckinResult(null);
+    setCheckinReportTitle(''); setCheckinReportDesc(''); setCheckinReportFile(null); setCheckinReportSuccess(false);
+    try {
+      const { data: apt, error } = await supabase
+        .from('appointments')
+        .select('*, patient:patient_id(id,name,email,phone,age,gender,blood_group,address,avatar_url), time_slot:slot_id(date,start_time,end_time)')
+        .eq('appointment_code', checkinCode.trim().toUpperCase())
+        .eq('doctor_id', doctorData.id)
+        .single();
+      if (error || !apt) { setCheckinError('Invalid or unrecognized code. Please check and try again.'); }
+      else {
+        const { data: health } = await supabase.from('patient_health_details').select('*').eq('patient_id', apt.patient_id).single();
+        setCheckinResult({ ...apt, healthDetails: health });
+      }
+    } catch { setCheckinError('Failed to look up patient.'); }
+    finally { setCheckinLoading(false); }
+  };
+
+  const handleCheckinAddReport = async () => {
+    if (!checkinReportTitle.trim() || !checkinResult) { alert('Please enter a title'); return; }
+    setCheckinReportSaving(true);
+    try {
+      let documentUrl = null, documentName = null;
+      if (checkinReportFile) {
+        const ext = checkinReportFile.name.split('.').pop();
+        const path = `${checkinResult.patient_id}/${Date.now()}.${ext}`;
+        const { error: upErr } = await supabase.storage.from('documents').upload(path, checkinReportFile);
+        if (upErr) throw upErr;
+        const { data: urlData } = await supabase.storage.from('documents').createSignedUrl(path, 60 * 60 * 24 * 365);
+        documentUrl = urlData?.signedUrl;
+        documentName = checkinReportFile.name;
+      }
+      const { error } = await supabase.from('medical_records').insert([{
+        patient_id: checkinResult.patient_id,
+        doctor_id: doctorData.id,
+        appointment_id: checkinResult.id,
+        record_type: checkinReportType,
+        title: checkinReportTitle,
+        description: checkinReportDesc,
+        document_url: documentUrl,
+        document_name: documentName,
+      }]);
+      if (error) throw error;
+      await supabase.from('notifications').insert([{
+        user_id: checkinResult.patient_id,
+        type: 'new_record',
+        title: 'New Medical Record Added',
+        message: `Dr. ${doctorData.name} added: ${checkinReportTitle}`,
+        related_id: checkinResult.id,
+      }]);
+      await supabase.from('appointments').update({ status: 'completed' }).eq('id', checkinResult.id);
+      setCheckinResult(prev => ({ ...prev, status: 'completed' }));
+      setCheckinReportSuccess(true);
+      setCheckinReportTitle(''); setCheckinReportDesc(''); setCheckinReportFile(null);
+      fetchAppointments();
+    } catch (e) { alert('Failed to save: ' + e.message); }
+    finally { setCheckinReportSaving(false); }
+  };
   const checkAuth = async () => { try { const userRole = localStorage.getItem('userRole'); const userId = localStorage.getItem('userId'); if (userRole !== 'doctor' || !userId) { router.push('/Login'); return; } const { data: { user } } = await supabase.auth.getUser(); if (!user) { router.push('/Login'); return; } const userData = await getUserRole(user.id); if (!userData || userData.role !== 'doctor') { router.push('/Login'); return; } setDoctorData(userData); setIsApproved(userData.is_approved === true); setProfileCompleted(userData.profile_completed === true); setIsAuthenticated(true); } catch { router.push('/Login'); } finally { setLoading(false); } };
   const fetchAppointments = async () => { try { const { data } = await supabase.from('appointments').select('*, patient:patient_id(id,name,email,phone,age,gender,blood_group,address,avatar_url), time_slot:slot_id(date,start_time,end_time)').eq('doctor_id', doctorData.id).order('created_at', { ascending: false }); setAppointments(data || []); } catch (e) { console.error(e); } };
   const fetchAllPatients = async () => { try { const { data } = await supabase.from('appointments').select('patient:patient_id(id,name,email,phone,age,gender,blood_group,address,avatar_url)').eq('doctor_id', doctorData.id); if (data) { const seen = new Set(); const unique = []; data.forEach(d => { if (d.patient && !seen.has(d.patient.id)) { seen.add(d.patient.id); unique.push(d.patient); } }); setAllPatients(unique); } } catch (e) { console.error(e); } };
@@ -537,6 +618,8 @@ export default function Doctor() {
             { id: 'appointments', label: 'Appointments', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', badge: upcomingAppointments.length },
             { id: 'patients', label: 'My Patients', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z', badge: allPatients.length },
             { id: 'timeslots', label: 'Time Slots', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', badge: availableSlots.length },
+            { id: 'payments', label: 'Payments', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
+            { id: 'checkin', label: 'Patient Check-In', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
             { id: 'messages', label: 'Messages', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', badge: unreadMsgCount },
             { id: 'profile', label: 'My Profile', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
           ].map(tab => (
@@ -551,7 +634,7 @@ export default function Doctor() {
       </aside>
 
       {/* Main */}
-      <main className="ml-60 min-h-screen">
+      <main className={`ml-60 ${currentView === 'checkin' ? 'h-screen flex flex-col overflow-hidden' : 'min-h-screen'}`}>
         <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
           <div className="px-7 py-4 flex items-center justify-between">
             <div>
@@ -560,6 +643,8 @@ export default function Doctor() {
                 {currentView === 'appointments' && 'Appointments'}
                 {currentView === 'patients' && 'My Patients'}
                 {currentView === 'timeslots' && 'Time Slots'}
+                {currentView === 'payments' && 'Payment Tracking'}
+                {currentView === 'checkin' && 'Patient Check-In'}
                 {currentView === 'messages' && 'Patient Messages'}
                 {currentView === 'profile' && 'My Profile'}
               </h1>
@@ -574,8 +659,8 @@ export default function Doctor() {
         {/* ═══════ MESSAGES ═══════ */}
         {currentView === 'messages' && doctorData && <DoctorMessagesView doctorData={doctorData} onReadMessages={() => setUnreadMsgCount(0)} />}
 
-        {/* ═══════ OTHER VIEWS ═══════ */}
-        {currentView !== 'messages' && (
+        {/* ═══════ OTHER VIEWS (non-fullscreen) ═══════ */}
+        {currentView !== 'messages' && currentView !== 'checkin' && (
           <div className="p-7">
             {/* ═══════ DASHBOARD ═══════ */}
             {currentView === 'dashboard' && (() => {
@@ -589,199 +674,199 @@ export default function Doctor() {
               const completionRate = appointments.length > 0 ? Math.round((completedApts.length / appointments.length) * 100) : 0;
               const recentPatients = [...allPatients].slice(0, 5);
               return (
-              <div className="space-y-6">
+                <div className="space-y-6">
 
-                {/* ── Hero banner ── */}
-                <div className="relative bg-gradient-to-br from-teal-700 via-teal-600 to-teal-500 rounded-2xl p-6 text-white overflow-hidden">
-                  <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -translate-y-1/3 translate-x-1/4" />
-                  <div className="absolute bottom-0 right-16 w-32 h-32 bg-white/5 rounded-full translate-y-1/2" />
-                  <div className="relative flex items-start justify-between gap-4">
-                    <div className="flex items-center space-x-4">
-                      {doctorData?.avatar_url
-                        ? <img src={doctorData.avatar_url} alt="" className="w-16 h-16 rounded-2xl object-cover ring-2 ring-white/30 shadow-lg flex-shrink-0" />
-                        : <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-2xl">{doctorData?.name?.charAt(0)}</span></div>}
-                      <div>
-                        <p className="text-teal-200 text-xs font-semibold uppercase tracking-wider mb-0.5">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}</p>
-                        <h2 className="text-xl font-bold">Dr. {doctorData?.name}</h2>
-                        <p className="text-teal-100 text-sm mt-0.5">{doctorData?.specialization}</p>
-                        <div className="flex flex-wrap items-center gap-3 mt-2">
-                          {doctorData?.clinic_place_name && (
-                            <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                              {doctorData.clinic_place_name}
-                            </span>
-                          )}
-                          {doctorData?.experience_years && (
-                            <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>
-                              {doctorData.experience_years} yrs exp
-                            </span>
-                          )}
-                          {doctorData?.consultation_fee && (
-                            <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                              ₹{doctorData.consultation_fee}/consult
-                            </span>
-                          )}
+                  {/* ── Hero banner ── */}
+                  <div className="relative bg-gradient-to-br from-teal-700 via-teal-600 to-teal-500 rounded-2xl p-6 text-white overflow-hidden">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -translate-y-1/3 translate-x-1/4" />
+                    <div className="absolute bottom-0 right-16 w-32 h-32 bg-white/5 rounded-full translate-y-1/2" />
+                    <div className="relative flex items-start justify-between gap-4">
+                      <div className="flex items-center space-x-4">
+                        {doctorData?.avatar_url
+                          ? <img src={doctorData.avatar_url} alt="" className="w-16 h-16 rounded-2xl object-cover ring-2 ring-white/30 shadow-lg flex-shrink-0" />
+                          : <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-2xl">{doctorData?.name?.charAt(0)}</span></div>}
+                        <div>
+                          <p className="text-teal-200 text-xs font-semibold uppercase tracking-wider mb-0.5">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}</p>
+                          <h2 className="text-xl font-bold">Dr. {doctorData?.name}</h2>
+                          <p className="text-teal-100 text-sm mt-0.5">{doctorData?.specialization}</p>
+                          <div className="flex flex-wrap items-center gap-3 mt-2">
+                            {doctorData?.clinic_place_name && (
+                              <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                {doctorData.clinic_place_name}
+                              </span>
+                            )}
+                            {doctorData?.experience_years && (
+                              <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>
+                                {doctorData.experience_years} yrs exp
+                              </span>
+                            )}
+                            {doctorData?.consultation_fee && (
+                              <span className="inline-flex items-center gap-1 text-teal-200 text-xs">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                ₹{doctorData.consultation_fee}/consult
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex-shrink-0 text-right">
-                      <p className="text-teal-200 text-xs">Doctor ID</p>
-                      <p className="text-white font-bold text-sm">{doctorData?.doctor_id || '—'}</p>
-                      <span className="inline-flex items-center gap-1 mt-2 bg-white/20 text-white text-[10px] font-semibold px-2 py-1 rounded-full">
-                        <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" /> Active
-                      </span>
+                      <div className="flex-shrink-0 text-right">
+                        <p className="text-teal-200 text-xs">Doctor ID</p>
+                        <p className="text-white font-bold text-sm">{doctorData?.doctor_id || '—'}</p>
+                        <span className="inline-flex items-center gap-1 mt-2 bg-white/20 text-white text-[10px] font-semibold px-2 py-1 rounded-full">
+                          <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" /> Active
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* ── Main stats row ── */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  {[
-                    { label: "Today's Appointments", value: todayAppointments.length, sub: `${scheduledApts.filter(a => a.time_slot?.date === todayStr).length} pending`, icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', color: 'bg-blue-50 text-blue-600', border: 'border-l-blue-500' },
-                    { label: 'Total Patients', value: allPatients.length, sub: `${thisMonthApts.length > 0 ? thisMonthApts.filter((v,i,a)=>a.findIndex(t=>t.patient_id===v.patient_id)===i).length : 0} this month`, icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z', color: 'bg-teal-50 text-teal-600', border: 'border-l-teal-500' },
-                    { label: 'Completed', value: completedApts.length, sub: `${completionRate}% completion rate`, icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', color: 'bg-green-50 text-green-600', border: 'border-l-green-500' },
-                    { label: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, sub: `₹${thisMonthRevenue.toLocaleString('en-IN')} this month`, icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'bg-amber-50 text-amber-600', border: 'border-l-amber-500' },
-                  ].map(s => (
-                    <div key={s.label} className={`bg-white rounded-xl p-5 border border-gray-100 border-l-4 ${s.border} hover:shadow-sm transition-shadow`}>
-                      <div className="flex items-start justify-between mb-3">
-                        <div className={`w-9 h-9 ${s.color} rounded-xl flex items-center justify-center`}>
-                          <Icon d={s.icon} className="w-4.5 h-4.5" />
+                  {/* ── Main stats row ── */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                      { label: "Today's Appointments", value: todayAppointments.length, sub: `${scheduledApts.filter(a => a.time_slot?.date === todayStr).length} pending`, icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', color: 'bg-blue-50 text-blue-600', border: 'border-l-blue-500' },
+                      { label: 'Total Patients', value: allPatients.length, sub: `${thisMonthApts.length > 0 ? thisMonthApts.filter((v, i, a) => a.findIndex(t => t.patient_id === v.patient_id) === i).length : 0} this month`, icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z', color: 'bg-teal-50 text-teal-600', border: 'border-l-teal-500' },
+                      { label: 'Completed', value: completedApts.length, sub: `${completionRate}% completion rate`, icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', color: 'bg-green-50 text-green-600', border: 'border-l-green-500' },
+                      { label: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, sub: `₹${thisMonthRevenue.toLocaleString('en-IN')} this month`, icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'bg-amber-50 text-amber-600', border: 'border-l-amber-500' },
+                    ].map(s => (
+                      <div key={s.label} className={`bg-white rounded-xl p-5 border border-gray-100 border-l-4 ${s.border} hover:shadow-sm transition-shadow`}>
+                        <div className="flex items-start justify-between mb-3">
+                          <div className={`w-9 h-9 ${s.color} rounded-xl flex items-center justify-center`}>
+                            <Icon d={s.icon} className="w-4.5 h-4.5" />
+                          </div>
                         </div>
+                        <h3 className="text-2xl font-bold text-gray-900">{s.value}</h3>
+                        <p className="text-xs font-semibold text-gray-600 mt-0.5">{s.label}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
                       </div>
-                      <h3 className="text-2xl font-bold text-gray-900">{s.value}</h3>
-                      <p className="text-xs font-semibold text-gray-600 mt-0.5">{s.label}</p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
+                    ))}
+                  </div>
+
+                  {/* ── Secondary stats ── */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
+                      <p className="text-2xl font-bold text-purple-700">{upcomingAppointments.length}</p>
+                      <p className="text-xs font-semibold text-gray-600 mt-1">Upcoming</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">Confirmed + Pending</p>
                     </div>
-                  ))}
-                </div>
-
-                {/* ── Secondary stats ── */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
-                    <p className="text-2xl font-bold text-purple-700">{upcomingAppointments.length}</p>
-                    <p className="text-xs font-semibold text-gray-600 mt-1">Upcoming</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">Confirmed + Pending</p>
-                  </div>
-                  <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
-                    <p className="text-2xl font-bold text-orange-600">{availableSlots.length}</p>
-                    <p className="text-xs font-semibold text-gray-600 mt-1">Open Slots</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">Available for booking</p>
-                  </div>
-                  <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
-                    <p className="text-2xl font-bold text-red-500">{cancelledApts.length}</p>
-                    <p className="text-xs font-semibold text-gray-600 mt-1">Cancelled</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">Total cancellations</p>
-                  </div>
-                </div>
-
-                {/* ── Today's appointments table + Recent patients ── */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-
-                  {/* Today's appointments — 2/3 width */}
-                  <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
-                      <div>
-                        <h2 className="text-sm font-bold text-gray-900">Today's Appointments</h2>
-                        <p className="text-[11px] text-gray-400 mt-0.5">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-                      </div>
-                      <button onClick={() => setCurrentView('appointments')} className="text-xs text-teal-600 font-semibold hover:text-teal-700 transition">View all →</button>
+                    <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
+                      <p className="text-2xl font-bold text-orange-600">{availableSlots.length}</p>
+                      <p className="text-xs font-semibold text-gray-600 mt-1">Open Slots</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">Available for booking</p>
                     </div>
-                    {todayAppointments.length === 0 ? (
-                      <div className="py-12 text-center">
-                        <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                          <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-5 h-5 text-gray-400" />
+                    <div className="bg-white rounded-xl border border-gray-100 p-4 text-center hover:shadow-sm transition-shadow">
+                      <p className="text-2xl font-bold text-red-500">{cancelledApts.length}</p>
+                      <p className="text-xs font-semibold text-gray-600 mt-1">Cancelled</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">Total cancellations</p>
+                    </div>
+                  </div>
+
+                  {/* ── Today's appointments table + Recent patients ── */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+                    {/* Today's appointments — 2/3 width */}
+                    <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
+                      <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
+                        <div>
+                          <h2 className="text-sm font-bold text-gray-900">Today's Appointments</h2>
+                          <p className="text-[11px] text-gray-400 mt-0.5">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
                         </div>
-                        <p className="text-sm font-semibold text-gray-500">No appointments today</p>
-                        <p className="text-xs text-gray-400 mt-0.5">Enjoy your day off!</p>
+                        <button onClick={() => setCurrentView('appointments')} className="text-xs text-teal-600 font-semibold hover:text-teal-700 transition">View all →</button>
                       </div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="bg-gray-50 border-b border-gray-100">
-                              {['Patient', 'Time', 'Token', 'Status', 'Actions'].map(h => (
-                                <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-50">
-                            {todayAppointments.map(apt => (
-                              <tr key={apt.id} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-4 py-3">
-                                  <button onClick={() => setViewingPatient(apt.patient)} className="flex items-center gap-2 hover:text-teal-700 transition text-left">
-                                    {apt.patient?.avatar_url
-                                      ? <img src={apt.patient.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover ring-1 ring-teal-100" />
-                                      : <div className="w-8 h-8 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-[10px]">{apt.patient?.name?.charAt(0)}</span></div>}
-                                    <div>
-                                      <span className="font-semibold text-gray-900 block">{apt.patient?.name}</span>
-                                      <span className="text-gray-400 text-[10px]">{apt.patient?.age ? `${apt.patient.age}y` : ''}{apt.patient?.gender ? ` · ${apt.patient.gender}` : ''}</span>
-                                    </div>
-                                  </button>
-                                </td>
-                                <td className="px-4 py-3 text-gray-500 whitespace-nowrap font-medium">{formatTime(apt.time_slot?.start_time)}</td>
-                                <td className="px-4 py-3">{apt.token_number ? <span className="bg-teal-50 text-teal-700 border border-teal-200 text-xs font-bold px-2 py-0.5 rounded-full">#{apt.token_number}</span> : <span className="text-gray-300">—</span>}</td>
-                                <td className="px-4 py-3"><StatusBadge status={apt.status} /></td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5">
-                                    {apt.status === 'scheduled' && <>
-                                      <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'confirmed')} className="px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 transition">Confirm</button>
-                                      <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'cancelled')} className="px-2.5 py-1 bg-red-500 text-white text-xs font-semibold rounded-lg hover:bg-red-600 transition">Reject</button>
-                                    </>}
-                                    {apt.status === 'confirmed' && <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'completed')} className="px-2.5 py-1 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition">Complete</button>}
-                                    {(apt.status === 'scheduled' || apt.status === 'confirmed') && <button onClick={() => { setSelectedAppointment(apt); setShowRecordModal(true); }} className="px-2.5 py-1 bg-purple-600 text-white text-xs font-semibold rounded-lg hover:bg-purple-700 transition">Record</button>}
-                                  </div>
-                                </td>
+                      {todayAppointments.length === 0 ? (
+                        <div className="py-12 text-center">
+                          <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-5 h-5 text-gray-400" />
+                          </div>
+                          <p className="text-sm font-semibold text-gray-500">No appointments today</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Enjoy your day off!</p>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-gray-100">
+                                {['Patient', 'Time', 'Token', 'Status', 'Actions'].map(h => (
+                                  <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
+                                ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50">
+                              {todayAppointments.map(apt => (
+                                <tr key={apt.id} className="hover:bg-gray-50 transition-colors">
+                                  <td className="px-4 py-3">
+                                    <button onClick={() => setViewingPatient(apt.patient)} className="flex items-center gap-2 hover:text-teal-700 transition text-left">
+                                      {apt.patient?.avatar_url
+                                        ? <img src={apt.patient.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover ring-1 ring-teal-100" />
+                                        : <div className="w-8 h-8 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-[10px]">{apt.patient?.name?.charAt(0)}</span></div>}
+                                      <div>
+                                        <span className="font-semibold text-gray-900 block">{apt.patient?.name}</span>
+                                        <span className="text-gray-400 text-[10px]">{apt.patient?.age ? `${apt.patient.age}y` : ''}{apt.patient?.gender ? ` · ${apt.patient.gender}` : ''}</span>
+                                      </div>
+                                    </button>
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap font-medium">{formatTime(apt.time_slot?.start_time)}</td>
+                                  <td className="px-4 py-3">{apt.token_number ? <span className="bg-teal-50 text-teal-700 border border-teal-200 text-xs font-bold px-2 py-0.5 rounded-full">#{apt.token_number}</span> : <span className="text-gray-300">—</span>}</td>
+                                  <td className="px-4 py-3"><StatusBadge status={apt.status} /></td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-1.5">
+                                      {apt.status === 'scheduled' && <>
+                                        <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'confirmed')} className="px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 transition">Confirm</button>
+                                        <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'cancelled')} className="px-2.5 py-1 bg-red-500 text-white text-xs font-semibold rounded-lg hover:bg-red-600 transition">Reject</button>
+                                      </>}
+                                      {apt.status === 'confirmed' && <button onClick={() => handleUpdateAppointmentStatus(apt.id, 'completed')} className="px-2.5 py-1 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition">Complete</button>}
+                                      {(apt.status === 'scheduled' || apt.status === 'confirmed') && <button onClick={() => { setSelectedAppointment(apt); setShowRecordModal(true); }} className="px-2.5 py-1 bg-purple-600 text-white text-xs font-semibold rounded-lg hover:bg-purple-700 transition">Record</button>}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Recent patients — 1/3 width */}
+                    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                      <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
+                        <h2 className="text-sm font-bold text-gray-900">Recent Patients</h2>
+                        <button onClick={() => setCurrentView('patients')} className="text-xs text-teal-600 font-semibold hover:text-teal-700 transition">All →</button>
                       </div>
-                    )}
+                      {recentPatients.length === 0 ? (
+                        <div className="py-10 text-center">
+                          <p className="text-xs text-gray-400">No patients yet</p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-gray-50">
+                          {recentPatients.map(pat => (
+                            <button key={pat.id} onClick={() => setViewingPatient(pat)}
+                              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition text-left">
+                              {pat.avatar_url
+                                ? <img src={pat.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0 ring-1 ring-teal-100" />
+                                : <div className="w-9 h-9 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-xs">{pat.name?.charAt(0)}</span></div>}
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-gray-900 truncate">{pat.name}</p>
+                                <p className="text-[11px] text-gray-400 truncate">{pat.age ? `${pat.age}y` : ''}{pat.gender ? ` · ${pat.gender}` : ''}{pat.blood_group ? ` · ${pat.blood_group}` : ''}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Recent patients — 1/3 width */}
-                  <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
-                      <h2 className="text-sm font-bold text-gray-900">Recent Patients</h2>
-                      <button onClick={() => setCurrentView('patients')} className="text-xs text-teal-600 font-semibold hover:text-teal-700 transition">All →</button>
+                  {/* ── No time slots warning ── */}
+                  {timeSlots.length === 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 flex items-start space-x-3">
+                      <Icon d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-sm font-semibold text-yellow-900 mb-1">No Time Slots Created</p>
+                        <p className="text-sm text-yellow-800 mb-3">Create time slots so patients can book appointments with you.</p>
+                        <button onClick={() => setShowCreateSlotModal(true)} className="px-4 py-2 bg-yellow-600 text-white text-sm font-semibold rounded-lg hover:bg-yellow-700 transition">Create Your First Time Slot</button>
+                      </div>
                     </div>
-                    {recentPatients.length === 0 ? (
-                      <div className="py-10 text-center">
-                        <p className="text-xs text-gray-400">No patients yet</p>
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-gray-50">
-                        {recentPatients.map(pat => (
-                          <button key={pat.id} onClick={() => setViewingPatient(pat)}
-                            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition text-left">
-                            {pat.avatar_url
-                              ? <img src={pat.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0 ring-1 ring-teal-100" />
-                              : <div className="w-9 h-9 bg-gradient-to-br from-teal-600 to-teal-400 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-xs">{pat.name?.charAt(0)}</span></div>}
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-gray-900 truncate">{pat.name}</p>
-                              <p className="text-[11px] text-gray-400 truncate">{pat.age ? `${pat.age}y` : ''}{pat.gender ? ` · ${pat.gender}` : ''}{pat.blood_group ? ` · ${pat.blood_group}` : ''}</p>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
-
-                {/* ── No time slots warning ── */}
-                {timeSlots.length === 0 && (
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 flex items-start space-x-3">
-                    <Icon d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-sm font-semibold text-yellow-900 mb-1">No Time Slots Created</p>
-                      <p className="text-sm text-yellow-800 mb-3">Create time slots so patients can book appointments with you.</p>
-                      <button onClick={() => setShowCreateSlotModal(true)} className="px-4 py-2 bg-yellow-600 text-white text-sm font-semibold rounded-lg hover:bg-yellow-700 transition">Create Your First Time Slot</button>
-                    </div>
-                  </div>
-                )}
-              </div>
               );
             })()}
 
@@ -1105,6 +1190,403 @@ export default function Doctor() {
             )}
           </div>
         )}
+
+        {/* ═══════ PAYMENTS ═══════ */}
+        {currentView !== 'messages' && currentView === 'payments' && (
+          <div className="p-7 space-y-6">
+            {/* Summary */}
+            <div className="grid grid-cols-4 gap-4">
+              {[
+                { label: 'Patients Paid', value: `₹${doctorPayments.reduce((s, p) => s + (p.total_amount || 0), 0).toLocaleString('en-IN')}`, color: 'border-l-blue-500' },
+                { label: 'Platform Cut (5%)', value: `−₹${doctorPayments.reduce((s, p) => s + (p.platform_fee || 0), 0).toLocaleString('en-IN')}`, color: 'border-l-red-400' },
+                { label: 'You Receive (95%)', value: `₹${doctorPayments.reduce((s, p) => s + (p.total_amount || 0) - (p.platform_fee || 0), 0).toLocaleString('en-IN')}`, color: 'border-l-teal-500' },
+                { label: 'Transactions', value: doctorPayments.length, color: 'border-l-green-500' },
+              ].map(s => (
+                <div key={s.label} className={`bg-white rounded-xl border border-gray-100 border-l-4 ${s.color} p-5`}>
+                  <p className="text-xs font-semibold text-gray-500">{s.label}</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">{s.value}</h3>
+                </div>
+              ))}
+            </div>
+
+            {doctorPayments.length > 0 ? (
+              <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-50">
+                  <h3 className="text-sm font-bold text-gray-900">Payment Records</h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">5% platform fee deducted per appointment</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-100">
+                        {['#', 'Patient', 'Apt. Code', 'Date', 'Patient Paid', 'Platform (5%)', 'You Receive', 'Status'].map(h => (
+                          <th key={h} className="text-left px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {doctorPayments.map((p, idx) => (
+                        <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-gray-300 font-medium">{idx + 1}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              {p.patient?.avatar_url
+                                ? <img src={p.patient.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                : <div className="w-6 h-6 bg-teal-700 rounded-full flex items-center justify-center flex-shrink-0"><span className="text-white text-[9px] font-bold">{p.patient?.name?.charAt(0)}</span></div>}
+                              <span className="font-semibold text-gray-800 whitespace-nowrap">{p.patient?.name || '—'}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md text-[11px]">
+                              {p.appointment?.appointment_code || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{p.appointment?.time_slot?.date ? new Date(p.appointment.time_slot.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
+                          <td className="px-4 py-3 font-bold text-blue-700">₹{p.total_amount}</td>
+                          <td className="px-4 py-3 text-red-500 font-semibold">−₹{p.platform_fee}</td>
+                          <td className="px-4 py-3 font-bold text-teal-700">₹{((p.total_amount || 0) - (p.platform_fee || 0)).toFixed(2)}</td>
+                          <td className="px-4 py-3">
+                            <span className="px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-full text-[10px] font-bold uppercase">{p.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-100 p-16 text-center">
+                <div className="w-14 h-14 bg-teal-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <Icon d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" className="w-7 h-7 text-teal-400" />
+                </div>
+                <p className="text-sm font-bold text-gray-800">No payments yet</p>
+                <p className="text-xs text-gray-400 mt-1">Payments appear when patients book and pay for appointments</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══════ PATIENT CHECK-IN ═══════ */}
+        {currentView === 'checkin' && (
+          <div className="flex flex-1 overflow-hidden">
+
+            {/* ── LEFT PANEL: Search + Patient Info ── */}
+            <div className="w-[420px] flex-shrink-0 flex flex-col border-r border-gray-100 bg-white overflow-hidden">
+
+              {/* Search header */}
+              <div className="bg-white border-b border-gray-100 px-5 py-4 flex-shrink-0">
+                <div className="flex items-center gap-2.5 mb-3">
+                  <div className="w-7 h-7 bg-teal-50 border border-teal-100 rounded-lg flex items-center justify-center">
+                    <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" className="w-3.5 h-3.5 text-teal-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-gray-900 font-bold text-sm">Patient Look-up</h2>
+                    <p className="text-gray-400 text-[10px]">Enter appointment code to load patient record</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={checkinCode}
+                    onChange={e => { setCheckinCode(e.target.value.toUpperCase()); setCheckinError(''); }}
+                    onKeyDown={e => e.key === 'Enter' && handlePatientCheckin()}
+                    placeholder="APT-XXXXXXXX"
+                    className="flex-1 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-mono font-bold text-gray-900 placeholder:text-gray-300 placeholder:font-normal placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition"
+                  />
+                  <button
+                    onClick={handlePatientCheckin}
+                    disabled={checkinLoading || !checkinCode.trim()}
+                    className="px-4 py-2.5 bg-teal-700 text-white rounded-xl text-sm font-bold hover:bg-teal-800 transition disabled:opacity-50 flex items-center gap-1.5 flex-shrink-0">
+                    {checkinLoading
+                      ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <Icon d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" className="w-4 h-4" />}
+                    {checkinLoading ? '' : 'Search'}
+                  </button>
+                </div>
+                {checkinError && (
+                  <div className="mt-2.5 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700 font-medium flex items-center gap-1.5">
+                    <Icon d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" className="w-3.5 h-3.5 flex-shrink-0 text-red-500" />
+                    {checkinError}
+                  </div>
+                )}
+              </div>
+
+              {/* Patient details scroll area */}
+              <div className="flex-1 overflow-y-auto">
+                {!checkinResult ? (
+                  <div className="flex flex-col items-center justify-center h-full text-center px-8 py-12">
+                    <div className="w-16 h-16 bg-teal-50 rounded-2xl flex items-center justify-center mb-4">
+                      <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" className="w-7 h-7 text-teal-400" />
+                    </div>
+                    <p className="text-sm font-bold text-gray-700">No patient loaded</p>
+                    <p className="text-xs text-gray-400 mt-1 leading-relaxed">Enter the appointment code from the patient's confirmation email or notification</p>
+                  </div>
+                ) : (() => {
+                  const apt = checkinResult;
+                  const p = apt.patient;
+                  const h = apt.healthDetails;
+                  return (
+                    <div className="p-4 space-y-3">
+
+                      {/* Patient avatar + name */}
+                      <div className="flex items-center gap-3 bg-teal-50 rounded-xl p-3 border border-teal-100">
+                        {p?.avatar_url
+                          ? <img src={p.avatar_url} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0 ring-2 ring-teal-200" />
+                          : <div className="w-12 h-12 bg-teal-700 rounded-xl flex items-center justify-center flex-shrink-0"><span className="text-white font-bold text-xl">{p?.name?.charAt(0)}</span></div>}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-gray-900 text-sm truncate">{p?.name}</p>
+                          <p className="text-xs text-teal-600 truncate">{p?.email}</p>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            {p?.age && <span className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-semibold">Age {p.age}</span>}
+                            {p?.gender && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full capitalize">{p.gender}</span>}
+                            {p?.blood_group && <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold">{p.blood_group}</span>}
+                          </div>
+                        </div>
+                        <span className={`text-[10px] px-2 py-1 rounded-full font-bold uppercase flex-shrink-0 ${apt.status === 'confirmed' ? 'bg-green-100 text-green-700' : apt.status === 'completed' ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {apt.status}
+                        </span>
+                      </div>
+
+                      {/* Appointment details */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-semibold uppercase mb-0.5">Date & Time</p>
+                          <p className="text-xs font-bold text-gray-900">{apt.time_slot?.date ? new Date(apt.time_slot.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'}</p>
+                          <p className="text-xs text-teal-600 font-semibold">{formatTime(apt.time_slot?.start_time)}</p>
+                        </div>
+                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-semibold uppercase mb-0.5">Contact</p>
+                          <p className="text-xs font-bold text-gray-900">{p?.phone || '—'}</p>
+                          <p className="text-[10px] text-gray-400 truncate">{p?.email}</p>
+                        </div>
+                      </div>
+
+                      {/* Apt code */}
+                      <div className="flex items-center justify-between bg-teal-700 rounded-xl px-3 py-2.5">
+                        <p className="text-teal-200 text-[10px] font-semibold uppercase">Appointment Code</p>
+                        <p className="text-white font-mono font-bold text-sm tracking-widest">{apt.appointment_code}</p>
+                      </div>
+
+                      {/* Symptoms & notes */}
+                      {apt.symptoms && (
+                        <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                          <p className="text-[10px] text-amber-600 font-bold uppercase mb-1">Symptoms</p>
+                          <p className="text-xs text-amber-900">{apt.symptoms}</p>
+                        </div>
+                      )}
+                      {apt.notes && (
+                        <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+                          <p className="text-[10px] text-blue-600 font-bold uppercase mb-1">Notes</p>
+                          <p className="text-xs text-blue-900">{apt.notes}</p>
+                        </div>
+                      )}
+
+                      {/* Health details */}
+                      {h && (
+                        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                          <div className="px-3 py-2.5 bg-gray-50 border-b border-gray-100">
+                            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Health Details</p>
+                          </div>
+                          <div className="p-3 space-y-2">
+                            <div className="grid grid-cols-3 gap-2">
+                              {[['Height', h.height_cm ? `${h.height_cm} cm` : '—'], ['Weight', h.weight_kg ? `${h.weight_kg} kg` : '—'], ['BMI', h.bmi || '—']].map(([l, v]) => (
+                                <div key={l} className="bg-teal-50 rounded-lg p-2 text-center">
+                                  <p className="text-[9px] text-teal-500 font-semibold">{l}</p>
+                                  <p className="text-sm font-bold text-teal-800">{v}</p>
+                                </div>
+                              ))}
+                            </div>
+                            {[['Allergies', h.allergies], ['Chronic Conditions', h.chronic_conditions], ['Current Medications', h.current_medications]].map(([l, v]) => v ? (
+                              <div key={l} className="bg-gray-50 rounded-lg p-2.5">
+                                <p className="text-[9px] text-gray-400 font-semibold uppercase mb-0.5">{l}</p>
+                                <p className="text-xs text-gray-800">{v}</p>
+                              </div>
+                            ) : null)}
+                            {h.emergency_contact_name && (
+                              <div className="bg-red-50 rounded-lg p-2.5 border border-red-100">
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <svg className="w-3 h-3 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                  <p className="text-[9px] text-red-500 font-bold uppercase tracking-wider">Emergency Contact</p>
+                                </div>
+                                <p className="text-xs font-semibold text-gray-900">{h.emergency_contact_name} · {h.emergency_contact_phone}</p>
+                                <p className="text-[10px] text-gray-400">{h.emergency_contact_relation}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Address */}
+                      {p?.address && (
+                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-bold uppercase mb-0.5">Address</p>
+                          <p className="text-xs text-gray-700">{p.address}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* ── RIGHT PANEL: Add Report + Actions ── */}
+            <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
+              {!checkinResult ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center px-12">
+                  <div className="w-20 h-20 bg-teal-100 rounded-3xl flex items-center justify-center mb-5">
+                    <Icon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" className="w-9 h-9 text-teal-500" />
+                  </div>
+                  <h3 className="text-base font-bold text-gray-700 mb-2">Ready for Check-In</h3>
+                  <p className="text-sm text-gray-400 leading-relaxed max-w-xs">Search a patient by their appointment code on the left to add a medical report and manage the visit</p>
+                </div>
+              ) : (() => {
+                const apt = checkinResult;
+                const p = apt.patient;
+                return (
+                  <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+                    {/* Top action bar */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-gray-900">Visit — {p?.name}</h3>
+                        <p className="text-xs text-gray-400">{apt.time_slot?.date ? new Date(apt.time_slot.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : ''} · {formatTime(apt.time_slot?.start_time)}</p>
+                      </div>
+                      {apt.status === 'confirmed' && (
+                        <button
+                          onClick={async () => {
+                            await supabase.from('appointments').update({ status: 'completed' }).eq('id', apt.id);
+                            setCheckinResult(prev => ({ ...prev, status: 'completed' }));
+                            fetchAppointments();
+                          }}
+                          className="px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 transition flex items-center gap-1.5">
+                          <Icon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" className="w-3.5 h-3.5" />
+                          Mark Completed
+                        </button>
+                      )}
+                      {apt.status === 'completed' && (
+                        <span className="px-3 py-1.5 bg-teal-100 text-teal-700 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                          <Icon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" className="w-3.5 h-3.5" />
+                          Visit Completed
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Success banner */}
+                    {checkinReportSuccess && (
+                      <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 flex items-center gap-2.5">
+                        <div className="w-7 h-7 bg-teal-600 rounded-full flex items-center justify-center flex-shrink-0">
+                          <Icon d="M5 13l4 4L19 7" className="w-3.5 h-3.5 text-white" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-teal-800">Report saved successfully!</p>
+                          <p className="text-xs text-teal-600">Patient has been notified and appointment marked as completed.</p>
+                        </div>
+                        <button onClick={() => setCheckinReportSuccess(false)} className="ml-auto text-teal-400 hover:text-teal-600">
+                          <Icon d="M6 18L18 6M6 6l12 12" className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ADD REPORT FORM */}
+                    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                      <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2.5">
+                        <div className="w-7 h-7 bg-teal-50 rounded-lg border border-teal-100 flex items-center justify-center flex-shrink-0">
+                          <Icon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" className="w-3.5 h-3.5 text-teal-600" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-gray-900">Medical Report</h4>
+                          <p className="text-[10px] text-gray-400">Complete the fields and save to close this visit</p>
+                        </div>
+                      </div>
+                      <div className="p-5 space-y-4">
+
+                        {/* Record type pills */}
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Report Type</label>
+                          <div className="flex flex-wrap gap-2">
+                            {[['prescription', 'Prescription'], ['lab_report', 'Lab Report'], ['scan', 'Imaging / Scan'], ['diagnosis', 'Diagnosis'], ['other', 'Other']].map(([val, label]) => (
+                              <button
+                                key={val}
+                                onClick={() => setCheckinReportType(val)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${checkinReportType === val ? 'bg-teal-700 text-white border-teal-700' : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-teal-300 hover:text-teal-700'}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Title */}
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+                            Title <span className="text-red-400 normal-case font-normal">*required</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={checkinReportTitle}
+                            onChange={e => setCheckinReportTitle(e.target.value)}
+                            placeholder="e.g. Amoxicillin 500mg course, CBC Report..."
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-gray-50 text-gray-900"
+                          />
+                        </div>
+
+                        {/* Description */}
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Clinical Notes</label>
+                          <textarea
+                            value={checkinReportDesc}
+                            onChange={e => setCheckinReportDesc(e.target.value)}
+                            placeholder="Dosage, instructions, observations, diagnosis details..."
+                            rows={4}
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-gray-50 text-gray-900 resize-none"
+                          />
+                        </div>
+
+                        {/* File upload */}
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Attachment <span className="text-gray-300 normal-case font-normal">(optional)</span></label>
+                          <label className="relative block cursor-pointer group">
+                            <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" onChange={e => setCheckinReportFile(e.target.files[0])} />
+                            <div className={`flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 border-dashed transition ${checkinReportFile ? 'border-teal-400 bg-teal-50' : 'border-gray-200 bg-gray-50 group-hover:border-teal-300 group-hover:bg-teal-50/50'}`}>
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${checkinReportFile ? 'bg-teal-700' : 'bg-gray-200'}`}>
+                                <Icon d={checkinReportFile ? "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" : "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"} className={`w-4 h-4 ${checkinReportFile ? 'text-white' : 'text-gray-400'}`} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                {checkinReportFile
+                                  ? <><p className="text-sm font-semibold text-teal-800 truncate">{checkinReportFile.name}</p><p className="text-xs text-teal-600">{(checkinReportFile.size / 1024).toFixed(1)} KB · Click to change</p></>
+                                  : <><p className="text-sm font-medium text-gray-600">Click to attach file</p><p className="text-xs text-gray-400">PDF, JPG, PNG — max 5 MB</p></>}
+                              </div>
+                              {checkinReportFile && (
+                                <button
+                                  onClick={e => { e.preventDefault(); e.stopPropagation(); setCheckinReportFile(null); }}
+                                  className="w-6 h-6 bg-red-100 hover:bg-red-200 rounded-full flex items-center justify-center flex-shrink-0 transition">
+                                  <Icon d="M6 18L18 6M6 6l12 12" className="w-3 h-3 text-red-500" />
+                                </button>
+                              )}
+                            </div>
+                          </label>
+                        </div>
+
+                        {/* Save button */}
+                        <button
+                          onClick={handleCheckinAddReport}
+                          disabled={checkinReportSaving || !checkinReportTitle.trim()}
+                          className="w-full py-3 bg-teal-700 text-white rounded-xl text-sm font-bold hover:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                          {checkinReportSaving
+                            ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving…</>
+                            : <><Icon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" className="w-4 h-4" />Save Report & Complete Visit</>}
+                        </button>
+
+                        <p className="text-[11px] text-gray-400 text-center">Saving the report will automatically mark this appointment as completed and notify the patient.</p>
+                      </div>
+                    </div>
+
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
       </main>
 
       {/* CREATE SLOT MODAL */}
