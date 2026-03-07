@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { getUserRole } from '@/lib/getUserRole';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 export default function Login() {
   const router = useRouter();
@@ -14,6 +15,14 @@ export default function Login() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Protect route: Redirect if already logged in
+  useEffect(() => {
+    const role = localStorage.getItem('userRole');
+    if (role === 'admin') router.push('/Admin');
+    else if (role === 'doctor') router.push('/Doctor');
+    else if (role === 'patient') router.push('/Patient');
+  }, [router]);
 
   const handleChange = (e) => {
     setFormData({
@@ -83,59 +92,56 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+    <div className="min-h-screen w-full relative flex items-center justify-center p-4 bg-gray-900 overflow-hidden">
+      {/* Background image & overlay matching Home/Symptom Checker */}
+      <img
+        src="https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=1920&q=80"
+        alt="Medical Background"
+        className="absolute inset-0 w-full h-full object-cover"
+      />
+      <div className="absolute inset-0 bg-gradient-to-b from-teal-900/90 via-teal-800/80 to-gray-900/95" />
+
+      {/* Navigation Bar (Optional for Auth pages, just the logo for branding) */}
+      <nav className="absolute top-0 left-0 w-full px-6 py-4 flex items-center justify-between z-10">
+        <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <img src="/amrt-logo.png" alt="AMRT Logo" className="h-10 w-auto object-contain" />
+
+        </Link>
+      </nav>
+
+      {/* Login Card inside Glassmorphism container */}
+      <div className="relative z-10 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back</h1>
-          <p className="text-gray-600">Login to your account</p>
+          <h1 className="text-3xl font-bold text-white mb-2">Welcome Back</h1>
+          <p className="text-teal-100/80">Login to your account</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-6">
           {/* Role Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-teal-100 mb-2">
               Login As
             </label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, role: 'patient' })}
-                className={`py-2 px-4 rounded-lg font-medium transition ${
-                  formData.role === 'patient'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Patient
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, role: 'doctor' })}
-                className={`py-2 px-4 rounded-lg font-medium transition ${
-                  formData.role === 'doctor'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Doctor
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, role: 'admin' })}
-                className={`py-2 px-4 rounded-lg font-medium transition ${
-                  formData.role === 'admin'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Admin
-              </button>
+            <div className="flex gap-2 bg-white/5 p-1 rounded-xl border border-white/10">
+              {['patient', 'doctor', 'admin'].map((roleType) => (
+                <button
+                  key={roleType}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, role: roleType })}
+                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-semibold transition-all duration-200 capitalize ${formData.role === roleType
+                    ? 'bg-teal-500 text-white shadow-lg shadow-teal-500/30'
+                    : 'text-teal-100/70 hover:text-white hover:bg-white/10'
+                    }`}
+                >
+                  {roleType}
+                </button>
+              ))}
             </div>
           </div>
 
           {/* Email */}
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="email" className="block text-sm font-medium text-teal-100 mb-2">
               Email Address
             </label>
             <input
@@ -145,14 +151,14 @@ export default function Login() {
               value={formData.email}
               onChange={handleChange}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-teal-100/40 focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none transition"
               placeholder="Enter your email"
             />
           </div>
 
           {/* Password */}
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="password" className="block text-sm font-medium text-teal-100 mb-2">
               Password
             </label>
             <input
@@ -162,14 +168,14 @@ export default function Login() {
               value={formData.password}
               onChange={handleChange}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-teal-100/40 focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none transition"
               placeholder="Enter your password"
             />
           </div>
 
           {/* Error Message */}
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+            <div className="bg-red-500/10 border border-red-500/30 text-red-200 px-4 py-3 rounded-xl text-sm">
               {error}
             </div>
           )}
@@ -178,16 +184,23 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3.5 bg-teal-500 hover:bg-teal-400 text-white font-bold rounded-xl shadow-lg shadow-teal-500/20 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
           >
-            {loading ? 'Logging in...' : 'Login'}
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                Logging in...
+              </span>
+            ) : (
+              'Login'
+            )}
           </button>
 
           {/* Signup Link */}
           {formData.role !== 'admin' && (
-            <p className="text-center text-sm text-gray-600">
+            <p className="text-center text-sm text-teal-100/80">
               Don't have an account?{' '}
-              <a href="/Signup" className="text-blue-600 hover:text-blue-700 font-medium">
+              <a href="/Signup" className="text-teal-400 hover:text-teal-300 font-bold transition-colors">
                 Sign up
               </a>
             </p>
