@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AMRT System – Presentation</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap" rel="stylesheet"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Inter',sans-serif;background:#0d1117;color:#e6edf3;overflow:hidden;height:100vh;}
+
+  /* ── slide container ── */
+  .deck{width:100%;height:100vh;position:relative;}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    justify-content:center;align-items:center;padding:60px 80px;
+    opacity:0;transition:opacity .5s ease;
+  }
+  .slide.active{display:flex;opacity:1;}
+
+  /* ── common backgrounds ── */
+  .bg-hero{background:linear-gradient(135deg,#0d2137 0%,#0f3b3b 50%,#0d1117 100%);}
+  .bg-dark{background:linear-gradient(160deg,#0d1117 0%,#0e2a2a 100%);}
+  .bg-blue{background:linear-gradient(160deg,#0d1117 0%,#0e1e3a 100%);}
+  .bg-purple{background:linear-gradient(160deg,#0d1117 0%,#1e0e3a 100%);}
+  .bg-green{background:linear-gradient(160deg,#0d1117 0%,#0e2a1a 100%);}
+
+  /* ── glass card ── */
+  .glass{
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:16px;
+    backdrop-filter:blur(12px);
+  }
+
+  /* ── typography ── */
+  .tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+       color:#2dd4bf;background:rgba(45,212,191,.12);border:1px solid rgba(45,212,191,.25);
+       border-radius:99px;padding:4px 14px;display:inline-block;margin-bottom:18px;}
+  h1{font-size:3.6rem;font-weight:900;line-height:1.1;color:#fff;}
+  h1 span{color:#2dd4bf;}
+  h2{font-size:2.2rem;font-weight:800;color:#fff;margin-bottom:6px;}
+  h3{font-size:1.15rem;font-weight:700;color:#fff;margin-bottom:6px;}
+  .sub{font-size:1.1rem;color:rgba(255,255,255,.65);line-height:1.7;max-width:640px;}
+  .label{font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#64748b;margin-bottom:10px;}
+  .accent{color:#2dd4bf;}
+
+  /* ── grid helpers ── */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px;width:100%;}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;width:100%;}
+  .col{display:flex;flex-direction:column;gap:12px;}
+
+  /* ── feature card ── */
+  .feat{padding:22px 24px;border-radius:14px;border:1px solid rgba(255,255,255,.08);
+        background:rgba(255,255,255,.04);display:flex;gap:16px;align-items:flex-start;}
+  .icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+        font-size:1.3rem;flex-shrink:0;}
+  .feat p{font-size:.88rem;color:rgba(255,255,255,.6);line-height:1.55;margin-top:4px;}
+
+  /* ── role card ── */
+  .role{padding:28px;border-radius:16px;border:1px solid rgba(255,255,255,.1);
+        background:rgba(255,255,255,.05);}
+  .role ul{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:8px;}
+  .role ul li{font-size:.88rem;color:rgba(255,255,255,.7);display:flex;gap:8px;align-items:flex-start;}
+  .role ul li::before{content:'✦';color:#2dd4bf;font-size:.7rem;margin-top:3px;flex-shrink:0;}
+
+  /* ── tech badge ── */
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;
+         background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+         font-size:.88rem;font-weight:600;color:#e2e8f0;}
+  .badges{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:24px;}
+
+  /* ── flow step ── */
+  .step{display:flex;align-items:center;gap:0;}
+  .step-box{padding:18px 22px;border-radius:12px;background:rgba(255,255,255,.06);
+            border:1px solid rgba(255,255,255,.1);text-align:center;min-width:150px;}
+  .step-box span{font-size:.78rem;color:rgba(255,255,255,.55);}
+  .arrow{color:#2dd4bf;font-size:1.4rem;padding:0 10px;flex-shrink:0;}
+
+  /* ── slide number & nav ── */
+  .nav{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+       display:flex;align-items:center;gap:18px;z-index:100;}
+  .nav button{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
+              color:#fff;border-radius:99px;padding:10px 22px;font-size:.88rem;
+              font-family:inherit;cursor:pointer;transition:all .25s;}
+  .nav button:hover{background:rgba(45,212,191,.25);border-color:#2dd4bf;}
+  .slide-num{font-size:.82rem;color:rgba(255,255,255,.45);min-width:64px;text-align:center;}
+
+  .dots{display:flex;gap:6px;}
+  .dot{width:7px;height:7px;border-radius:99px;background:rgba(255,255,255,.2);
+       cursor:pointer;transition:all .3s;}
+  .dot.on{background:#2dd4bf;width:22px;}
+
+  /* ── title slide extras ── */
+  .hero-bar{position:absolute;top:0;left:0;right:0;height:3px;
+            background:linear-gradient(90deg,#2dd4bf,#3b82f6,#a855f7);}
+  .meta{font-size:.9rem;color:rgba(255,255,255,.4);margin-top:36px;}
+
+  /* ── db table ── */
+  table{width:100%;border-collapse:collapse;font-size:.84rem;}
+  th{background:rgba(45,212,191,.15);color:#2dd4bf;text-align:left;padding:10px 14px;
+     font-weight:700;letter-spacing:.05em;}
+  td{padding:9px 14px;border-bottom:1px solid rgba(255,255,255,.06);color:rgba(255,255,255,.75);}
+  tr:last-child td{border:none;}
+
+  /* ── progress bar ── */
+  .prog-bar{height:4px;background:rgba(255,255,255,.08);border-radius:99px;margin-top:4px;}
+  .prog-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#2dd4bf,#3b82f6);}
+
+  /* ── header band ── */
+  .hd{text-align:center;margin-bottom:36px;}
+  .hd h2{font-size:2rem;}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<!-- ═══════════════════════════════ SLIDE 1 – Title ═══════════════════════════════ -->
+<div class="slide bg-hero active" id="s1">
+  <div class="hero-bar"></div>
+  <div style="text-align:center;max-width:780px;">
+    <div class="tag">College Project Presentation</div>
+    <h1>AMRT <span>Healthcare</span><br/>Appointment System</h1>
+    <p class="sub" style="margin:24px auto 0;">
+      A full-stack, role-based digital healthcare platform featuring AI symptom analysis,
+      real-time doctor–patient chat, and seamless appointment management.
+    </p>
+    <div class="meta">Next.js 14 &nbsp;·&nbsp; Supabase &nbsp;·&nbsp; WebSocket &nbsp;·&nbsp; Tailwind CSS</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 2 – Problem ═══════════════════════════════ -->
+<div class="slide bg-dark" id="s2">
+  <div style="width:100%;max-width:900px;">
+    <div class="hd">
+      <div class="tag">Problem Statement</div>
+      <h2>Why This System Is Needed</h2>
+    </div>
+    <div class="grid2">
+      <div class="feat">
+        <div class="icon" style="background:rgba(239,68,68,.15);">🏥</div>
+        <div>
+          <h3>Fragmented Healthcare Access</h3>
+          <p>Patients struggle to find the right specialist quickly, leading to delayed diagnosis and treatment.</p>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(234,179,8,.15);">📞</div>
+        <div>
+          <h3>Inefficient Appointment Booking</h3>
+          <p>Traditional phone-based booking wastes time for both doctors and patients with no real-time availability.</p>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(59,130,246,.15);">💬</div>
+        <div>
+          <h3>No Secure Communication Channel</h3>
+          <p>After booking, patients have no safe, direct channel to consult their assigned doctor digitally.</p>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(168,85,247,.15);">🔍</div>
+        <div>
+          <h3>Lack of Preliminary Guidance</h3>
+          <p>Patients visit clinics for minor issues due to no pre-assessment tool to judge urgency.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 3 – Objective ═══════════════════════════════ -->
+<div class="slide bg-blue" id="s3">
+  <div style="width:100%;max-width:820px;">
+    <div class="hd">
+      <div class="tag">Objective</div>
+      <h2>What We Built</h2>
+    </div>
+    <div class="col" style="gap:18px;">
+      <div class="glass" style="padding:22px 28px;display:flex;gap:18px;align-items:center;">
+        <div style="font-size:2rem;">🎯</div>
+        <div>
+          <h3>Unified Healthcare Portal</h3>
+          <p style="color:rgba(255,255,255,.6);font-size:.9rem;margin-top:4px;">
+            A single web platform where patients book appointments, doctors manage schedules,
+            and admins oversee the entire ecosystem in their dedicated dashboards.
+          </p>
+        </div>
+      </div>
+      <div class="glass" style="padding:22px 28px;display:flex;gap:18px;align-items:center;">
+        <div style="font-size:2rem;">🤖</div>
+        <div>
+          <h3>AI-Powered Symptom Checker</h3>
+          <p style="color:rgba(255,255,255,.6);font-size:.9rem;margin-top:4px;">
+            Patients describe symptoms to an intelligent AI assistant that provides preliminary
+            assessment and urgency guidance before booking.
+          </p>
+        </div>
+      </div>
+      <div class="glass" style="padding:22px 28px;display:flex;gap:18px;align-items:center;">
+        <div style="font-size:2rem;">⚡</div>
+        <div>
+          <h3>Real-Time Doctor–Patient Communication</h3>
+          <p style="color:rgba(255,255,255,.6);font-size:.9rem;margin-top:4px;">
+            After appointment confirmation, a secure WebSocket chat room opens between the
+            doctor and patient for direct digital consultation.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 4 – Tech Stack ═══════════════════════════════ -->
+<div class="slide bg-dark" id="s4">
+  <div style="text-align:center;max-width:860px;width:100%;">
+    <div class="tag">Technology Stack</div>
+    <h2>Built With Modern Technologies</h2>
+    <div class="badges">
+      <div class="badge"><span style="color:#38bdf8;">⬡</span> Next.js 14</div>
+      <div class="badge"><span style="color:#34d399;">⬡</span> React 18</div>
+      <div class="badge"><span style="color:#818cf8;">⬡</span> Supabase (PostgreSQL)</div>
+      <div class="badge"><span style="color:#f472b6;">⬡</span> WebSocket (ws)</div>
+      <div class="badge"><span style="color:#2dd4bf;">⬡</span> Tailwind CSS</div>
+      <div class="badge"><span style="color:#fb923c;">⬡</span> Node.js</div>
+      <div class="badge"><span style="color:#a3e635;">⬡</span> Nodemailer</div>
+      <div class="badge"><span style="color:#f9a8d4;">⬡</span> Supabase Auth / RLS</div>
+    </div>
+    <div class="grid2" style="margin-top:32px;gap:20px;">
+      <div class="glass" style="padding:22px;">
+        <div class="label">Frontend</div>
+        <p style="font-size:.9rem;color:rgba(255,255,255,.65);line-height:1.6;">
+          Next.js App Router with React 18, Tailwind CSS glassmorphism design, role-based routing via middleware.
+        </p>
+      </div>
+      <div class="glass" style="padding:22px;">
+        <div class="label">Backend & Database</div>
+        <p style="font-size:.9rem;color:rgba(255,255,255,.65);line-height:1.6;">
+          Supabase (PostgreSQL + Row-Level Security), Next.js API routes, Node.js WebSocket server on port 8080.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 5 – Architecture ═══════════════════════════════ -->
+<div class="slide bg-dark" id="s5">
+  <div style="width:100%;max-width:900px;">
+    <div class="hd">
+      <div class="tag">System Architecture</div>
+      <h2>How Everything Connects</h2>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:16px;">
+      <!-- row 1 -->
+      <div style="display:flex;gap:16px;justify-content:center;">
+        <div class="step-box glass"><strong>Browser Client</strong><br/><span>Next.js React App</span></div>
+      </div>
+      <!-- arrows down -->
+      <div style="display:flex;gap:60px;color:#2dd4bf;font-size:1.2rem;">
+        <span>↓ HTTP / API Routes</span>
+        <span>↓ WebSocket ws://</span>
+      </div>
+      <!-- row 2 -->
+      <div style="display:flex;gap:16px;justify-content:center;">
+        <div class="step-box glass"><strong>Next.js API</strong><br/><span>Admin actions, email</span></div>
+        <div class="step-box glass"><strong>WS Server</strong><br/><span>Node.js · Port 8080</span></div>
+      </div>
+      <div style="display:flex;gap:60px;color:#2dd4bf;font-size:1.2rem;">
+        <span>↓ Supabase JS SDK</span>
+        <span>↓ Supabase Admin SDK</span>
+      </div>
+      <!-- row 3 -->
+      <div style="display:flex;gap:16px;justify-content:center;">
+        <div class="step-box glass" style="min-width:200px;"><strong>Supabase</strong><br/><span>PostgreSQL + Auth + RLS</span></div>
+        <div class="step-box glass"><strong>Nodemailer</strong><br/><span>Email Notifications</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 6 – Features ═══════════════════════════════ -->
+<div class="slide bg-green" id="s6">
+  <div style="width:100%;max-width:920px;">
+    <div class="hd">
+      <div class="tag">Key Features</div>
+      <h2>Platform Capabilities</h2>
+    </div>
+    <div class="grid3">
+      <div class="feat">
+        <div class="icon" style="background:rgba(45,212,191,.15);">🤖</div>
+        <div><h3>AI Symptom Checker</h3><p>Intelligent pre-assessment with urgency guidance before booking.</p></div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(59,130,246,.15);">💬</div>
+        <div><h3>Real-Time Chat</h3><p>Doctor–patient WebSocket messaging with typing indicators & read receipts.</p></div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(168,85,247,.15);">📅</div>
+        <div><h3>Appointment Booking</h3><p>Find specialists, view credentials, and book with a few clicks.</p></div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(251,146,60,.15);">🔔</div>
+        <div><h3>Email Notifications</h3><p>Automated emails on booking, confirmation, rejection & cancellation.</p></div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(234,179,8,.15);">📍</div>
+        <div><h3>Nearby Doctors</h3><p>Geo-proximity based doctor search for patients in the area.</p></div>
+      </div>
+      <div class="feat">
+        <div class="icon" style="background:rgba(239,68,68,.15);">🔐</div>
+        <div><h3>Role-Based Access</h3><p>Admin, Doctor, Patient dashboards with secure middleware routing.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 7 – Roles ═══════════════════════════════ -->
+<div class="slide bg-blue" id="s7">
+  <div style="width:100%;max-width:920px;">
+    <div class="hd">
+      <div class="tag">User Roles</div>
+      <h2>Three Dedicated Dashboards</h2>
+    </div>
+    <div class="grid3">
+      <div class="role glass">
+        <div class="icon" style="background:rgba(239,68,68,.15);font-size:1.5rem;width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;">👑</div>
+        <h3 style="margin-top:12px;" class="accent">Admin</h3>
+        <ul>
+          <li>Approve / Reject doctor registrations</li>
+          <li>View all doctors & patients</li>
+          <li>Monitor platform-wide appointments</li>
+          <li>Remove doctors if needed</li>
+          <li>Send approval email notifications</li>
+        </ul>
+      </div>
+      <div class="role glass">
+        <div class="icon" style="background:rgba(59,130,246,.15);font-size:1.5rem;width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;">🩺</div>
+        <h3 style="margin-top:12px;" class="accent">Doctor</h3>
+        <ul>
+          <li>Manage incoming appointment requests</li>
+          <li>Confirm or reject appointments</li>
+          <li>Chat with patients post-confirmation</li>
+          <li>View patient medical history</li>
+          <li>Update profile & availability</li>
+        </ul>
+      </div>
+      <div class="role glass">
+        <div class="icon" style="background:rgba(45,212,191,.15);font-size:1.5rem;width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;">🧑‍⚕️</div>
+        <h3 style="margin-top:12px;" class="accent">Patient</h3>
+        <ul>
+          <li>Browse approved doctors by specialty</li>
+          <li>Book appointments with ease</li>
+          <li>Use AI symptom checker</li>
+          <li>Chat after appointment confirmed</li>
+          <li>View appointment history</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 8 – Database ═══════════════════════════════ -->
+<div class="slide bg-purple" id="s8">
+  <div style="width:100%;max-width:860px;">
+    <div class="hd">
+      <div class="tag">Database Schema</div>
+      <h2>Supabase PostgreSQL Tables</h2>
+    </div>
+    <div class="grid2" style="gap:20px;">
+      <div class="glass" style="padding:18px;border-radius:14px;">
+        <div class="label">Core Tables</div>
+        <table>
+          <thead><tr><th>Table</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>users</td><td>Auth + role (admin/doctor/patient)</td></tr>
+            <tr><td>doctors</td><td>Profile, specialty, approval status</td></tr>
+            <tr><td>patients</td><td>Profile, medical history</td></tr>
+            <tr><td>appointments</td><td>Booking, status, timestamps</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="glass" style="padding:18px;border-radius:14px;">
+        <div class="label">Communication Tables</div>
+        <table>
+          <thead><tr><th>Table</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>messages</td><td>Chat messages with room_id, is_read flag</td></tr>
+            <tr><td>notifications</td><td>In-app notification events per user</td></tr>
+          </tbody>
+        </table>
+        <div class="label" style="margin-top:18px;">Security</div>
+        <div style="font-size:.85rem;color:rgba(255,255,255,.6);line-height:1.6;">
+          Row-Level Security (RLS) enforced on all tables. Service Role Key used only in the WebSocket server for admin operations.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 9 – Real-Time Chat ═══════════════════════════════ -->
+<div class="slide bg-dark" id="s9">
+  <div style="width:100%;max-width:860px;">
+    <div class="hd">
+      <div class="tag">Core Module</div>
+      <h2>Real-Time Chat System</h2>
+    </div>
+    <div class="grid2">
+      <div class="col">
+        <div class="glass" style="padding:22px;">
+          <h3>How It Works</h3>
+          <ul style="list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:10px;">
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">1.</span> Patient books appointment</li>
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">2.</span> Doctor confirms → chat unlocked</li>
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">3.</span> Both connect to WebSocket server</li>
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">4.</span> Deterministic room ID generated</li>
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">5.</span> Messages persisted to Supabase</li>
+            <li style="display:flex;gap:10px;font-size:.88rem;color:rgba(255,255,255,.7);"><span class="accent">6.</span> Read receipts & presence events broadcast</li>
+          </ul>
+        </div>
+      </div>
+      <div class="col">
+        <div class="feat">
+          <div class="icon" style="background:rgba(45,212,191,.15);">🔒</div>
+          <div><h3>Appointment-Gated</h3><p>Chat only unlocks after a doctor confirms. Verified on every message.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(59,130,246,.15);">⚡</div>
+          <div><h3>WebSocket Events</h3><p>join · message · typing · read_receipt · presence</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(168,85,247,.15);">💾</div>
+          <div><h3>Persistent History</h3><p>All messages stored in Supabase <code style="color:#2dd4bf;">messages</code> table for later retrieval.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 10 – User Flow ═══════════════════════════════ -->
+<div class="slide bg-green" id="s10">
+  <div style="width:100%;max-width:860px;">
+    <div class="hd">
+      <div class="tag">User Journey</div>
+      <h2>Patient Appointment Flow</h2>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px;align-items:center;">
+      <div style="display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:4px;">
+        <div class="step-box glass" style="min-width:130px;"><strong>Sign Up</strong><br/><span>Create account</span></div>
+        <span class="arrow">→</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>AI Check</strong><br/><span>Symptom checker</span></div>
+        <span class="arrow">→</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>Find Doctor</strong><br/><span>By specialty / area</span></div>
+        <span class="arrow">→</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>Book Slot</strong><br/><span>Pick date & time</span></div>
+      </div>
+      <div style="display:flex;gap:80px;color:#2dd4bf;">↓<span style="margin-left:100px;">↓</span></div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:4px;">
+        <div class="step-box glass" style="min-width:130px;background:rgba(45,212,191,.08);border-color:rgba(45,212,191,.3);"><strong>📧 Email</strong><br/><span>Confirmation sent</span></div>
+        <span class="arrow">←</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>Chat</strong><br/><span>Real-time consult</span></div>
+        <span class="arrow">←</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>Doctor Confirms</strong><br/><span>Unlocks chat</span></div>
+        <span class="arrow">←</span>
+        <div class="step-box glass" style="min-width:130px;"><strong>Admin Approves</strong><br/><span>Doctor verified</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 11 – UI Design ═══════════════════════════════ -->
+<div class="slide bg-dark" id="s11">
+  <div style="width:100%;max-width:820px;">
+    <div class="hd">
+      <div class="tag">UI / UX Design</div>
+      <h2>Design Principles</h2>
+    </div>
+    <div class="grid2">
+      <div class="col">
+        <div class="feat">
+          <div class="icon" style="background:rgba(45,212,191,.15);">🎨</div>
+          <div><h3>Dark Teal Glassmorphism</h3><p>Consistent frosted-glass panels on a deep teal gradient across all pages.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(59,130,246,.15);">📱</div>
+          <div><h3>Fully Responsive</h3><p>Mobile-first Tailwind layout adapting from small phones to wide desktops.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(168,85,247,.15);">✨</div>
+          <div><h3>Micro-Animations</h3><p>Hover lift effects, spin loaders, pulse indicators, and slide transitions.</p></div>
+        </div>
+      </div>
+      <div class="glass" style="padding:28px;display:flex;flex-direction:column;gap:16px;">
+        <div class="label">Color Palette</div>
+        <div style="display:flex;gap:10px;">
+          <div style="flex:1;height:42px;border-radius:8px;background:#0d2137;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:.72rem;color:rgba(255,255,255,.6);">Teal-900</div>
+          <div style="flex:1;height:42px;border-radius:8px;background:#2dd4bf;display:flex;align-items:center;justify-content:center;font-size:.72rem;color:#000;font-weight:700;">Teal-400</div>
+          <div style="flex:1;height:42px;border-radius:8px;background:#0d1117;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:.72rem;color:rgba(255,255,255,.6);">Gray-900</div>
+          <div style="flex:1;height:42px;border-radius:8px;background:#f0fdfa;display:flex;align-items:center;justify-content:center;font-size:.72rem;color:#0d2137;font-weight:700;">Teal-50</div>
+        </div>
+        <div class="label" style="margin-top:8px;">UI Patterns</div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:8px;">
+          <li style="font-size:.85rem;color:rgba(255,255,255,.65);">✦ backdrop-blur glassmorphism cards</li>
+          <li style="font-size:.85rem;color:rgba(255,255,255,.65);">✦ Gradient overlays on hero images</li>
+          <li style="font-size:.85rem;color:rgba(255,255,255,.65);">✦ Animated pulse status indicators</li>
+          <li style="font-size:.85rem;color:rgba(255,255,255,.65);">✦ Role-based themed accent colors</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 12 – Security ═══════════════════════════════ -->
+<div class="slide bg-purple" id="s12">
+  <div style="width:100%;max-width:820px;">
+    <div class="hd">
+      <div class="tag">Security</div>
+      <h2>Data Protection & Access Control</h2>
+    </div>
+    <div class="grid2">
+      <div class="col">
+        <div class="feat">
+          <div class="icon" style="background:rgba(239,68,68,.15);">🛡️</div>
+          <div><h3>Row-Level Security (RLS)</h3><p>Supabase RLS policies ensure users can only access their own data at the database level.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(251,146,60,.15);">🔑</div>
+          <div><h3>Middleware Route Guard</h3><p>Next.js middleware checks user role from localStorage before rendering any dashboard.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(45,212,191,.15);">🚪</div>
+          <div><h3>Chat Gating</h3><p>WebSocket server verifies a confirmed appointment exists before allowing any chat message.</p></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="feat">
+          <div class="icon" style="background:rgba(59,130,246,.15);">🔐</div>
+          <div><h3>Supabase Auth</h3><p>Email/password authentication managed by Supabase Auth with JWT tokens.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(168,85,247,.15);">🏥</div>
+          <div><h3>Doctor Verification</h3><p>Doctors must be approved by Admin before they appear to patients or can receive bookings.</p></div>
+        </div>
+        <div class="feat">
+          <div class="icon" style="background:rgba(234,179,8,.15);">🔒</div>
+          <div><h3>Environment Variables</h3><p>Supabase keys stored securely in <code style="color:#2dd4bf;">.env.local</code>, never exposed to the client for service-role operations.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SLIDE 13 – Conclusion ═══════════════════════════════ -->
+<div class="slide bg-hero" id="s13">
+  <div class="hero-bar"></div>
+  <div style="text-align:center;max-width:780px;">
+    <div class="tag">Conclusion</div>
+    <h2 style="font-size:2.6rem;margin-bottom:20px;">A Complete Healthcare Ecosystem</h2>
+    <div class="grid3" style="margin:28px 0 32px;text-align:left;">
+      <div class="glass" style="padding:20px;">
+        <div style="font-size:2rem;margin-bottom:10px;">🏗️</div>
+        <h3>Full-Stack Architecture</h3>
+        <p style="font-size:.84rem;color:rgba(255,255,255,.6);margin-top:6px;">Next.js frontend + Supabase backend + WebSocket server working in unison.</p>
+      </div>
+      <div class="glass" style="padding:20px;">
+        <div style="font-size:2rem;margin-bottom:10px;">👥</div>
+        <h3>Multi-Role Platform</h3>
+        <p style="font-size:.84rem;color:rgba(255,255,255,.6);margin-top:6px;">Three distinct dashboards tailored for Admin, Doctor & Patient workflows.</p>
+      </div>
+      <div class="glass" style="padding:20px;">
+        <div style="font-size:2rem;margin-bottom:10px;">🚀</div>
+        <h3>Real-Time & AI</h3>
+        <p style="font-size:.84rem;color:rgba(255,255,255,.6);margin-top:6px;">WebSocket chat and AI symptom checking elevate the platform beyond a basic CRUD app.</p>
+      </div>
+    </div>
+    <p class="sub" style="font-size:1rem;margin:0 auto;">
+      The AMRT System demonstrates practical application of modern web technologies
+      to solve a real-world healthcare access problem — from database design to UI/UX.
+    </p>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<!-- ── Navigation ── -->
+<div class="nav">
+  <button onclick="go(-1)">← Prev</button>
+  <div class="dots" id="dots"></div>
+  <button onclick="go(1)">Next →</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const dotsEl = document.getElementById('dots');
+  let cur = 0;
+
+  // build dots
+  slides.forEach((_,i)=>{
+    const d = document.createElement('div');
+    d.className = 'dot' + (i===0?' on':'');
+    d.onclick = () => show(i);
+    dotsEl.appendChild(d);
+  });
+
+  function show(n){
+    slides[cur].classList.remove('active');
+    dotsEl.children[cur].classList.remove('on');
+    cur = (n + slides.length) % slides.length;
+    slides[cur].classList.add('active');
+    dotsEl.children[cur].classList.add('on');
+  }
+  function go(d){ show(cur+d); }
+
+  // keyboard navigation
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key==='ArrowDown') go(1);
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp') go(-1);
+  });
+</script>
+</body>
+</html>
